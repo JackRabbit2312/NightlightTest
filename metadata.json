@@ -1,0 +1,5 @@
+{
+  "name": "Nightlight Dashboard 2.0",
+  "description": "A comprehensive Home Assistant dashboard card featuring calendar, chores, meals, and whiteboard functionality with user-specific views and memory.",
+  "requestFramePermissions": []
+}
