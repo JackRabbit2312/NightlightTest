@@ -16,7 +16,6 @@
         color: #fff;
         font-family: 'Inter', sans-serif;
       }
-      /* Mock container to simulate Home Assistant card environment */
       .card-preview {
         width: 100%;
         max-width: 1200px;
@@ -40,15 +39,14 @@
 </script>
 </head>
   <body>
-    <!-- This is a preview container. In Home Assistant, the card is loaded directly. -->
     <div class="card-preview">
         <nightlight-calendar-card></nightlight-calendar-card>
     </div>
     
-    <script type="module" src="./index.js"></script>
+    <script type="module" src="./nightlight-card.js"></script>
     
     <script>
-      // Mock HASS object for local preview purposes
+      // Mock HASS object for local preview
       const card = document.querySelector('nightlight-calendar-card');
       const mockHass = {
         states: {},
@@ -58,7 +56,6 @@
         callWS: async () => ({ items: [] })
       };
       
-      // Inject mock config
       card.setConfig({
         type: 'custom:nightlight-calendar-card',
         title: 'Family Hub',
