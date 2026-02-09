@@ -1,6 +1,6 @@
 {
   "name": "Nightlight Dashboard",
   "content_in_root": true,
-  "filename": "index.js",
+  "filename": "nightlight.js",
   "render_readme": true
 }
