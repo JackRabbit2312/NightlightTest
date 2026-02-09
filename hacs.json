@@ -1,6 +1,6 @@
 {
   "name": "Nightlight Dashboard",
   "content_in_root": true,
-  "filename": "nightlight-dashboard.js",
+  "filename": "nightlight-card.js",
   "render_readme": true
 }
