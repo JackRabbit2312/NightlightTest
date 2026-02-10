@@ -754,7 +754,7 @@ class NightlightDashboard extends LitElement {
         <div class="cal-header-row">
            ${['MON','TUE','WED','THU','FRI','SAT','SUN'].map(d => html`<div>${d}</div>`)}
         </div>
-        <div class="cal-grid">
+        <div class="cal-grid no-scrollbar">
            ${days.map(d => {
               if (!d.date) return html`<div class="cal-day empty"></div>`;
               
@@ -919,6 +919,12 @@ class NightlightDashboard extends LitElement {
 
   _renderModal() {
     if (!this._selectedEvent) return '';
+    const start = new Date(this._selectedEvent.start.dateTime || this._selectedEvent.start.date);
+    const end = new Date(this._selectedEvent.end.dateTime || this._selectedEvent.end.date);
+    const timeStr = this._selectedEvent.isAllDay 
+        ? 'All Day' 
+        : `${start.toLocaleString()} - ${end.toLocaleTimeString()}`;
+
     return html`
       <div class="modal-overlay" @click="${() => this._selectedEvent = null}">
         <div class="modal-card" @click="${e => e.stopPropagation()}">
@@ -929,8 +935,13 @@ class NightlightDashboard extends LitElement {
            <div class="modal-content">
              <div class="meta-row">
                <ha-icon icon="mdi:clock-outline"></ha-icon>
-               <span>${new Date(this._selectedEvent.start.dateTime || this._selectedEvent.start.date).toLocaleString()}</span>
+               <span>${timeStr}</span>
              </div>
+             ${this._selectedEvent.location ? html`
+             <div class="meta-row">
+               <ha-icon icon="mdi:map-marker"></ha-icon>
+               <span>${this._selectedEvent.location}</span>
+             </div>` : ''}
              <div class="meta-row">
                <ha-icon icon="mdi:calendar-blank"></ha-icon>
                <span>${this._selectedEvent.friendly_name}</span>
@@ -991,7 +1002,11 @@ class NightlightDashboard extends LitElement {
         --nl-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
         
         display: block;
-        height: calc(100vh - 56px);
+        height: 100%;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
         background: var(--primary-background-color);
         font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
         overflow: hidden;
@@ -1089,8 +1104,8 @@ class NightlightDashboard extends LitElement {
 
       /* Theme Switch Styling */
       .theme-switch {
-        width: 48px;
-        height: 26px;
+        width: 56px;
+        height: 32px;
         background: var(--nl-surface);
         border: 1px solid var(--nl-border);
         border-radius: 20px;
@@ -1099,20 +1114,20 @@ class NightlightDashboard extends LitElement {
         transition: background 0.3s;
       }
       .switch-knob {
-        width: 20px;
-        height: 20px;
+        width: 24px;
+        height: 24px;
         background: var(--nl-fg);
         border-radius: 50%;
         position: absolute;
-        top: 2px;
-        left: 2px;
+        top: 3px;
+        left: 4px;
         transition: transform 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
         display: flex;
         align-items: center;
         justify-content: center;
         color: var(--nl-bg);
       }
-      .dark .switch-knob { transform: translateX(22px); background: var(--nl-accent); color: #fff; }
+      .dark .switch-knob { transform: translateX(24px); background: var(--nl-accent); color: #fff; }
 
       .view-toggles { background: var(--nl-surface); padding: 4px; border-radius: 10px; display: flex; gap: 4px; border: 1px solid var(--nl-border); }
       .view-toggles button {
@@ -1137,7 +1152,9 @@ class NightlightDashboard extends LitElement {
       /* Calendar Grid - Skylight Style */
       .calendar-month { height: 100%; display: flex; flex-direction: column; background: var(--nl-bg); border-radius: var(--nl-radius); border: 1px solid var(--nl-border); overflow: hidden; box-shadow: var(--nl-shadow); }
       .cal-header-row { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; padding: 16px 0; border-bottom: 1px solid var(--nl-border); font-weight: 600; color: var(--nl-fg-sec); font-size: 0.9rem; letter-spacing: 1px; background: var(--nl-surface); }
-      .cal-grid { flex: 1; display: grid; grid-template-columns: repeat(7, 1fr); grid-auto-rows: 1fr; }
+      .cal-grid { flex: 1; display: grid; grid-template-columns: repeat(7, 1fr); grid-auto-rows: 1fr; overflow-y: auto; -ms-overflow-style: none; scrollbar-width: none; }
+      .cal-grid::-webkit-scrollbar { display: none; }
+      
       .cal-day { border-right: 1px solid var(--nl-border); border-bottom: 1px solid var(--nl-border); padding: 8px; cursor: pointer; transition: background 0.1s; display: flex; flex-direction: column; gap: 6px; overflow: hidden; position: relative; }
       .cal-day:hover { background: var(--nl-surface); }
       .cal-day.today { background: rgba(59, 130, 246, 0.05); }
