@@ -1,5 +1,5 @@
 /**
- * Nightlight Dashboard (v3.1.0 - Skylight Edition)
+ * Nightlight Dashboard (v3.3.0 - Skylight Edition)
  * A modernize, streamlined Home Assistant card with To-do memory, 
  * User-Specific Views, and Hybrid Controller logic.
  */
@@ -39,8 +39,12 @@ class NightlightDashboard extends LitElement {
       title: "Family Hub",
       theme: "light",
       entities: [],
-      chore_start: "06:00",
-      chore_end: "09:00"
+      periods: [
+        { name: "Morning", start: "06:00", end: "09:00" },
+        { name: "Afternoon", start: "09:01", end: "17:00" },
+        { name: "Evening", start: "17:01", end: "21:00" }
+      ],
+      chores: []
     };
   }
 
@@ -135,13 +139,27 @@ class NightlightDashboard extends LitElement {
     for (const kid of this.config.chores) {
       if (kid.todo_list) {
         try {
+          // Fetch items using standard WebSocket (efficient equivalent of todo.get_items)
           const result = await this.hass.callWS({
             type: "todo/item/list",
             entity_id: kid.todo_list,
           });
+          
           const taggedItems = (result.items || []).map(item => {
             const newItem = JSON.parse(JSON.stringify(item));
             newItem.list_id = kid.todo_list;
+            
+            // Logic for 1. 2. 3. prefixes to differentiate Morning/Afternoon/Night
+            const summary = newItem.summary || "";
+            const match = summary.match(/^([1-3])\.\s*(.*)/);
+            if (match) {
+                newItem.period_index = parseInt(match[1]); // 1, 2, or 3
+                newItem.label = match[2]; // Truncated text (e.g., "Brush Teeth")
+            } else {
+                newItem.period_index = 0; // No prefix found
+                newItem.label = summary;
+            }
+            
             return newItem;
           });
           allItems.push(...taggedItems);
@@ -187,35 +205,28 @@ class NightlightDashboard extends LitElement {
     }
   }
 
-  _getTodoStatus(entityId, taskLabel) {
-    if (!this._todoItems) return false;
-    const item = this._todoItems.find(i =>
-      i.list_id === entityId &&
-      i.summary.trim().toLowerCase() === taskLabel.trim().toLowerCase()
-    );
-    return item ? item.status === 'completed' : false;
-  }
-
-  async _toggleTodo(entityId, taskLabel, isDone) {
-    if (!entityId) return;
-    const existingItem = this._todoItems.find(i => 
-      i.list_id === entityId && 
-      i.summary.trim().toLowerCase() === taskLabel.trim().toLowerCase()
-    );
-
-    const identifier = existingItem && existingItem.uid ? existingItem.uid : taskLabel;
-    const newStatus = isDone ? 'needs_action' : 'completed';
+  async _toggleTodo(item) {
+    if (!item) return;
+    const newStatus = item.status === 'completed' ? 'needs_action' : 'completed';
+    
+    // Optimistic UI update
+    const oldStatus = item.status;
+    item.status = newStatus;
+    this.requestUpdate();
 
     try {
-      this.requestUpdate(); 
       await this.hass.callService('todo', 'update_item', {
-        entity_id: entityId,
-        item: identifier,
+        entity_id: item.list_id,
+        item: item.uid || item.summary, // Use original summary (with prefix) or UID
         status: newStatus
       });
-      await this._fetchChoreData();
+      // Background refresh to ensure sync
+      this._fetchChoreData();
     } catch (e) {
       console.error("Todo Toggle Failed:", e);
+      // Revert on failure
+      item.status = oldStatus;
+      this.requestUpdate();
     }
   }
 
@@ -475,6 +486,46 @@ class NightlightDashboard extends LitElement {
               </button>
             `)}
           </div>
+
+          <div class="sidebar-spacer" style="flex: 1"></div>
+          
+          <!-- Calendar Controls moved to Sidebar Bottom -->
+          ${this._activeView === 'calendar' ? html`
+            <div class="sidebar-controls">
+                <div class="control-group">
+                  <div class="control-label">View</div>
+                  <div class="view-toggles sidebar-mode">
+                    ${['month', 'week', 'day', 'agenda'].map(m => html`
+                      <button class="${this._calendarMode === m ? 'active' : ''}" 
+                              @click="${() => { this._calendarMode = m; this._menuOpen = false; }}">
+                        ${m}
+                      </button>
+                    `)}
+                  </div>
+                  <button class="today-btn full" @click="${() => { this._referenceDate = new Date(); this._menuOpen = false; }}">Jump to Today</button>
+                </div>
+
+                <div class="control-group">
+                  <div class="control-label">Calendars</div>
+                  <div class="persona-stack sidebar-mode">
+                    ${(this.config.entities || []).filter(e => e.entity.startsWith('calendar')).map(ent => {
+                        const cal = this._events.find(ev => ev.origin === ent.entity) || {};
+                        const icon = ent.icon || cal.icon;
+                        const initial = ent.name ? ent.name[0] : (cal.friendly_name ? cal.friendly_name[0] : 'C');
+                        
+                        return html`
+                        <div class="persona-dot ${this._activeCalendars.includes(ent.entity) ? 'active' : 'inactive'}" 
+                             style="background: ${ent.color}; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;" 
+                             title="${ent.entity}"
+                             @click="${() => this._togglePersona(ent.entity)}">
+                          ${ent.picture ? html`<img src="${ent.picture}">` : 
+                             (icon ? html`<ha-icon icon="${icon}" style="--mdc-icon-size: 16px;"></ha-icon>` : initial)}
+                        </div>
+                      `})}
+                  </div>
+                </div>
+            </div>
+          ` : ''}
         </nav>
 
         <ha-icon-button class="mobile-toggle" @click="${() => this._menuOpen = true}">
@@ -505,36 +556,6 @@ class NightlightDashboard extends LitElement {
                       <ha-icon icon="${this._themeMode === 'dark' ? 'mdi:weather-night' : 'mdi:weather-sunny'}" style="--mdc-icon-size: 14px;"></ha-icon>
                    </div>
               </div>
-
-              ${this._activeView === 'calendar' ? html`
-                  <div class="calendar-controls">
-                    <div class="view-toggles">
-                      ${['month', 'week', 'day', 'agenda'].map(m => html`
-                        <button class="${this._calendarMode === m ? 'active' : ''}" 
-                                @click="${() => { this._calendarMode = m; }}">
-                          ${m}
-                        </button>
-                      `)}
-                    </div>
-                    <button class="today-btn" @click="${() => { this._referenceDate = new Date(); }}">Today</button>
-                    <div class="persona-stack">
-                      ${(this.config.entities || []).filter(e => e.entity.startsWith('calendar')).map(ent => {
-                        const cal = this._events.find(ev => ev.origin === ent.entity) || {};
-                        const icon = ent.icon || cal.icon;
-                        const initial = ent.name ? ent.name[0] : (cal.friendly_name ? cal.friendly_name[0] : 'C');
-                        
-                        return html`
-                        <div class="persona-dot ${this._activeCalendars.includes(ent.entity) ? 'active' : 'inactive'}" 
-                             style="background: ${ent.color}; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;" 
-                             title="${ent.entity}"
-                             @click="${() => this._togglePersona(ent.entity)}">
-                          ${ent.picture ? html`<img src="${ent.picture}">` : 
-                             (icon ? html`<ha-icon icon="${icon}" style="--mdc-icon-size: 16px;"></ha-icon>` : initial)}
-                        </div>
-                      `})}
-                    </div>
-                  </div>
-              ` : ''}
             </div>
           </header>
 
@@ -579,7 +600,7 @@ class NightlightDashboard extends LitElement {
          if (this._calendarMode === 'month') return this._renderMonthGrid();
          if (this._calendarMode === 'agenda') return this._renderAgenda();
          return this._renderTimeGrid(this._calendarMode === 'week' ? 7 : 1);
-      default: return html`<div class="placeholder-view"></div>`;
+      default: return html`<div class="placeholder-view">View: ${this._activeView} active</div>`;
     }
   }
 
@@ -684,13 +705,18 @@ class NightlightDashboard extends LitElement {
     const currentUser = this.hass.user ? this.hass.user.name : null;
     const isAdmin = this.hass.user ? this.hass.user.is_admin : false;
 
-    // Determine Active Period
-    const activePeriod = this.config.periods.find(p => {
+    // Determine Active Period based on config.periods array order
+    let activePeriodIndex = -1;
+    const activePeriod = this.config.periods.find((p, index) => {
       const [sh, sm] = p.start.split(':').map(Number);
       const [eh, em] = p.end.split(':').map(Number);
       const start = sh * 60 + sm;
       const end = eh * 60 + em;
-      return currentMins >= start && currentMins <= end;
+      if (currentMins >= start && currentMins <= end) {
+          activePeriodIndex = index;
+          return true;
+      }
+      return false;
     });
 
     if (!activePeriod) return html`
@@ -699,6 +725,9 @@ class NightlightDashboard extends LitElement {
         <h2>No Active Chore Period</h2>
         <p>Check back later.</p>
       </div>`;
+
+    // Map 1st period -> Prefix "1.", 2nd -> "2.", etc.
+    const targetPrefix = activePeriodIndex + 1; 
 
     const visibleKids = this.config.chores.filter(kid => 
       isAdmin || !kid.assigned_user || kid.assigned_user === currentUser
@@ -709,7 +738,12 @@ class NightlightDashboard extends LitElement {
         <div class="period-badge">Current: ${activePeriod.name}</div>
         <div class="chore-grid">
           ${visibleKids.map(kid => {
-             const tasks = (kid.items || []).filter(i => i.period === activePeriod.name);
+             // Filter tasks matching kid's list ID AND current period prefix (1., 2., 3.)
+             const tasks = (this._todoItems || []).filter(i => 
+                 i.list_id === kid.todo_list && 
+                 (i.period_index === targetPrefix)
+             );
+             
              if (tasks.length === 0) return '';
              
              return html`
@@ -721,10 +755,10 @@ class NightlightDashboard extends LitElement {
                  </div>
                  <div class="task-list">
                    ${tasks.map(item => {
-                      const isDone = this._getTodoStatus(kid.todo_list, item.label);
+                      const isDone = item.status === 'completed';
                       return html`
                         <div class="task-row ${isDone ? 'completed' : ''}"
-                             @click="${() => this._toggleTodo(kid.todo_list, item.label, isDone)}">
+                             @click="${() => this._toggleTodo(item)}">
                           <ha-icon icon="${isDone ? 'mdi:checkbox-marked-circle' : 'mdi:checkbox-blank-circle-outline'}"></ha-icon>
                           <span>${item.label}</span>
                         </div>
@@ -989,7 +1023,7 @@ class NightlightDashboard extends LitElement {
 
   static get styles() {
     return css`
-            :host {
+      :host {
         /* SKYLIGHT LIGHT THEME */
         --nl-bg: #FFFFFF;
         --nl-surface: #F3F4F6;
@@ -1084,6 +1118,15 @@ class NightlightDashboard extends LitElement {
       .badge { position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; background: #EF4444; border-radius: 50%; }
 
       .mobile-toggle { display: none; position: absolute; top: 16px; left: 16px; z-index: 50; color: var(--nl-fg); }
+      
+      /* Sidebar Controls (New) */
+      .sidebar-controls { margin-top: auto; padding-top: 20px; border-top: 1px solid var(--nl-border); display: flex; flex-direction: column; gap: 16px; }
+      .control-label { font-size: 0.75rem; text-transform: uppercase; color: var(--nl-fg-sec); font-weight: 700; letter-spacing: 0.5px; margin-bottom: 8px; }
+      .view-toggles.sidebar-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; border: none; background: none; padding: 0; }
+      .view-toggles.sidebar-mode button { background: var(--nl-surface); border: 1px solid var(--nl-border); color: var(--nl-fg); text-align: center; justify-content: center; padding: 10px; border-radius: 8px; cursor: pointer; }
+      .view-toggles.sidebar-mode button.active { background: var(--nl-accent); color: #fff; border-color: var(--nl-accent); }
+      .today-btn.full { width: 100%; margin: 8px 0 0 0; text-align: center; background: var(--nl-surface); border: 1px solid var(--nl-border); padding: 8px 16px; border-radius: 8px; cursor: pointer; color: var(--nl-fg); font-weight: 600; }
+      .persona-stack.sidebar-mode { flex-wrap: wrap; margin: 0; gap: 8px; display: flex; }
 
       /* Main Stage */
       .stage { flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden; background: var(--nl-bg); }
@@ -1096,7 +1139,17 @@ class NightlightDashboard extends LitElement {
       }
       .header-left { display: flex; align-items: center; gap: 24px; }
       .header-titles h1 { margin: 0; font-size: 2rem; font-weight: 700; color: var(--nl-fg); letter-spacing: -0.5px; }
-      .subtitle { display: flex; align-items: center; gap: 16px; color: var(--nl-fg-sec); font-size: 1.1rem; margin-top: 4px; }
+      
+      /* Subtitle Fix for Mobile */
+      .subtitle { 
+        display: flex; 
+        align-items: center; 
+        gap: 12px; 
+        color: var(--nl-fg-sec); 
+        font-size: 1.1rem; 
+        margin-top: 4px; 
+        white-space: nowrap; 
+      }
       .clock { font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; font-weight: 500; }
       
       .nav-controls { display: flex; gap: 8px; }
@@ -1133,16 +1186,6 @@ class NightlightDashboard extends LitElement {
       }
       .dark .switch-knob { transform: translateX(30px); background: var(--nl-accent); color: #fff; }
 
-      .view-toggles { background: var(--nl-surface); padding: 4px; border-radius: 10px; display: flex; gap: 4px; border: 1px solid var(--nl-border); }
-      .view-toggles button {
-        border: none; background: none; padding: 8px 16px; border-radius: 8px; 
-        font-size: 0.9rem; font-weight: 600; color: var(--nl-fg-sec); cursor: pointer; text-transform: capitalize; transition: all 0.2s;
-      }
-      .view-toggles button.active { background: var(--nl-bg); color: var(--nl-fg); box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
-      .today-btn { background: var(--nl-surface); border: 1px solid var(--nl-border); padding: 8px 16px; border-radius: 8px; cursor: pointer; color: var(--nl-fg); font-weight: 600; font-size: 0.9rem; margin: 0; transition: background 0.2s; }
-      .today-btn:hover { background: var(--nl-border); }
-      
-      .persona-stack { display: flex; gap: -6px; margin-left: 8px; }
       .persona-dot { width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--nl-bg); cursor: pointer; transition: transform 0.2s, opacity 0.2s; opacity: 0.4; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
       .persona-dot.active { opacity: 1; transform: scale(1.1); z-index: 10; border-color: var(--nl-accent); }
       .persona-dot img { width: 100%; height: 100%; object-fit: cover; }
@@ -1300,7 +1343,8 @@ class NightlightDashboard extends LitElement {
         .mobile-close { display: block; }
         .desktop-toggle { display: none; }
         .stage-header { padding-left: 60px; padding-right: 16px; }
-        .header-titles h1 { font-size: 1.4rem; }
+        .header-titles h1 { font-size: 1.2rem; }
+        .subtitle { font-size: 0.9rem; }
         .tg-col-head { font-size: 0.8rem; text-overflow: ellipsis; overflow: hidden; padding: 8px 2px; }
         .content-body { padding: 0 16px 16px 16px; }
       }
