@@ -1,5 +1,5 @@
 /**
- * Nightlight Dashboard (v3.0.0 - Skylight Edition)
+ * Nightlight Dashboard (v3.1.0 - Skylight Edition)
  * A modernize, streamlined Home Assistant card with To-do memory, 
  * User-Specific Views, and Hybrid Controller logic.
  */
@@ -82,13 +82,6 @@ class NightlightDashboard extends LitElement {
     // 1. Unified Hybrid Mode Handling
     if (changedProps.has('_activeView')) {
       const coreIds = ['calendar', 'meals', 'whiteboard', 'chores'];
-
-      // Control host sizing via attribute
-      if (coreIds.includes(this._activeView)) {
-        this.setAttribute('mode', 'core');
-      } else {
-        this.setAttribute('mode', 'section');
-      }
 
       // Handle View Controller Input Select
       if (this.config.view_controller && this.hass) {
@@ -420,18 +413,24 @@ class NightlightDashboard extends LitElement {
   render() {
     if (!this.hass) return html``;
 
-    const coreIds = ['calendar', 'meals', 'whiteboard', 'chores'];
-    const isCoreMode = coreIds.includes(this._activeView);
-    const headerTitle = (this._activeView === 'calendar') ?
-      this._referenceDate.toLocaleString('default', { month: 'long', year: 'numeric' }) :
-      (this.config.title || "Family Hub");
-
     const coreNav = [
       { id: 'calendar', name: 'Calendar', icon: 'mdi:calendar-month' },
       { id: 'meals', name: 'Dinner', icon: 'mdi:silverware-fork-knife' },
       { id: 'whiteboard', name: 'Notes', icon: 'mdi:note-edit' },
       { id: 'chores', name: 'Chores', icon: 'mdi:check-all' }
     ];
+
+    let headerTitle = this.config.title || "Family Hub";
+    if (this._activeView === 'calendar') {
+        headerTitle = this._referenceDate.toLocaleString('default', { month: 'long', year: 'numeric' });
+    } else {
+        const core = coreNav.find(n => n.id === this._activeView);
+        if (core) headerTitle = core.name;
+        else {
+            const custom = (this.config.navigation || []).find(n => n.name === this._activeView);
+            if (custom) headerTitle = custom.name;
+        }
+    }
 
     const customNav = this.config.navigation || [];
     const notesState = this.hass.states[this.config.notes_entity];
@@ -441,7 +440,7 @@ class NightlightDashboard extends LitElement {
     const activeTheme = this._themeMode === 'dark' ? 'dark' : 'light';
 
     return html`
-      <div class="nightlight-hub ${activeTheme} ${isCoreMode ? 'mode-core' : 'mode-section'} ${this._menuOpen ? 'menu-open' : ''}">
+      <div class="nightlight-hub ${activeTheme} ${this._menuOpen ? 'menu-open' : ''}">
         
         <!-- SIDEBAR -->
         <nav class="sidebar">
@@ -486,9 +485,6 @@ class NightlightDashboard extends LitElement {
         <main class="stage">
           <header class="stage-header">
             <div class="header-left">
-              <ha-icon-button class="desktop-toggle" @click="${() => this._menuOpen = !this._menuOpen}">
-                 <ha-icon icon="mdi:menu"></ha-icon>
-              </ha-icon-button>
               <div class="header-titles">
                 <h1>${headerTitle}</h1>
                 <div class="subtitle">
@@ -504,13 +500,14 @@ class NightlightDashboard extends LitElement {
             </div>
 
             <div class="header-right">
+              <div class="theme-switch" @click="${this._toggleTheme}" title="Toggle Theme">
+                   <div class="switch-knob">
+                      <ha-icon icon="${this._themeMode === 'dark' ? 'mdi:weather-night' : 'mdi:weather-sunny'}" style="--mdc-icon-size: 14px;"></ha-icon>
+                   </div>
+              </div>
+
               ${this._activeView === 'calendar' ? html`
                   <div class="calendar-controls">
-                    <div class="theme-switch" @click="${this._toggleTheme}" title="Toggle Theme">
-                         <div class="switch-knob">
-                            <ha-icon icon="${this._themeMode === 'dark' ? 'mdi:weather-night' : 'mdi:weather-sunny'}" style="--mdc-icon-size: 14px;"></ha-icon>
-                         </div>
-                    </div>
                     <div class="view-toggles">
                       ${['month', 'week', 'day', 'agenda'].map(m => html`
                         <button class="${this._calendarMode === m ? 'active' : ''}" 
@@ -1011,18 +1008,7 @@ class NightlightDashboard extends LitElement {
         --nl-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
       }
 
-      /* Hybrid Mode Styling */
-      :host([mode="section"]) { 
-        height: auto; 
-        background: transparent;
-      }
-      :host([mode="section"]) .sidebar { transform: translateX(-100%); position: fixed; inset: 0; z-index: 2000; box-shadow: 10px 0 25px rgba(0,0,0,0.5); display: flex !important; }
-      :host([mode="section"]) .menu-open .sidebar { transform: translateX(0); }
-      :host([mode="section"]) .desktop-toggle { display: none !important; }
-      :host([mode="section"]) .mobile-toggle { display: block !important; }
-      :host([mode="section"]) .stage { padding: 0; }
-      :host([mode="section"]) .nightlight-hub { display: block; }
-      
+      /* Unified Mode Styling */
       .nightlight-hub {
         display: flex;
         height: 100%;
@@ -1032,7 +1018,7 @@ class NightlightDashboard extends LitElement {
         transition: background 0.3s, color 0.3s;
       }
 
-      /* Sidebar */
+      /* Sidebar - Persistent on Desktop */
       .sidebar {
         width: var(--nl-sidebar-w);
         background: var(--nl-surface);
@@ -1043,6 +1029,7 @@ class NightlightDashboard extends LitElement {
         gap: 12px;
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         z-index: 100;
+        flex-shrink: 0;
       }
       .sidebar-top {
         display: flex;
@@ -1089,7 +1076,6 @@ class NightlightDashboard extends LitElement {
         flex-shrink: 0;
       }
       .header-left { display: flex; align-items: center; gap: 24px; }
-      .desktop-toggle { margin-left: -12px; color: var(--nl-fg-sec); }
       .header-titles h1 { margin: 0; font-size: 2rem; font-weight: 700; color: var(--nl-fg); letter-spacing: -0.5px; }
       .subtitle { display: flex; align-items: center; gap: 16px; color: var(--nl-fg-sec); font-size: 1.1rem; margin-top: 4px; }
       .clock { font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; font-weight: 500; }
@@ -1098,6 +1084,9 @@ class NightlightDashboard extends LitElement {
       .nav-controls button { background: var(--nl-surface); border: 1px solid var(--nl-border); border-radius: 8px; cursor: pointer; color: var(--nl-fg); padding: 4px 8px; transition: background 0.2s; }
       .nav-controls button:hover { background: var(--nl-border); }
       
+      .header-right { display: flex; align-items: center; gap: 20px; }
+      .calendar-controls { display: flex; align-items: center; gap: 16px; }
+
       /* Theme Switch Styling */
       .theme-switch {
         width: 48px;
@@ -1107,7 +1096,6 @@ class NightlightDashboard extends LitElement {
         border-radius: 20px;
         position: relative;
         cursor: pointer;
-        margin-right: 16px;
         transition: background 0.3s;
       }
       .switch-knob {
@@ -1132,10 +1120,10 @@ class NightlightDashboard extends LitElement {
         font-size: 0.9rem; font-weight: 600; color: var(--nl-fg-sec); cursor: pointer; text-transform: capitalize; transition: all 0.2s;
       }
       .view-toggles button.active { background: var(--nl-bg); color: var(--nl-fg); box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
-      .today-btn { background: var(--nl-surface); border: 1px solid var(--nl-border); padding: 8px 16px; border-radius: 8px; cursor: pointer; color: var(--nl-fg); font-weight: 600; font-size: 0.9rem; margin: 0 16px; transition: background 0.2s; }
+      .today-btn { background: var(--nl-surface); border: 1px solid var(--nl-border); padding: 8px 16px; border-radius: 8px; cursor: pointer; color: var(--nl-fg); font-weight: 600; font-size: 0.9rem; margin: 0; transition: background 0.2s; }
       .today-btn:hover { background: var(--nl-border); }
       
-      .persona-stack { display: flex; gap: -6px; }
+      .persona-stack { display: flex; gap: -6px; margin-left: 8px; }
       .persona-dot { width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--nl-bg); cursor: pointer; transition: transform 0.2s, opacity 0.2s; opacity: 0.4; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
       .persona-dot.active { opacity: 1; transform: scale(1.1); z-index: 10; border-color: var(--nl-accent); }
       .persona-dot img { width: 100%; height: 100%; object-fit: cover; }
@@ -1247,6 +1235,42 @@ class NightlightDashboard extends LitElement {
       .fab { position: fixed; bottom: 40px; right: 40px; width: 64px; height: 64px; border-radius: 50%; background: var(--nl-accent); color: #fff; border: none; font-size: 28px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.2s; z-index: 100; }
       .fab:hover { transform: scale(1.1); }
 
+      /* Editor Styles */
+      .editor-container {
+        padding: 16px;
+        font-family: var(--paper-font-body1_-_font-family);
+        color: var(--primary-text-color);
+      }
+      .editor-section {
+        background: var(--card-background-color);
+        border: 1px solid var(--divider-color);
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+      .editor-section h3 {
+        margin-top: 0;
+        margin-bottom: 16px;
+        font-weight: 500;
+        color: var(--primary-color);
+      }
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+        gap: 16px;
+      }
+      .full-width {
+        grid-column: 1 / -1;
+      }
+      .info-box {
+        background: rgba(var(--rgb-primary-color), 0.1);
+        padding: 12px;
+        border-radius: 4px;
+        font-size: 0.9em;
+        margin-top: 8px;
+        color: var(--primary-text-color);
+      }
+
       /* Responsive */
       @media (max-width: 768px) {
         .sidebar { position: fixed; inset: 0; width: 85%; max-width: 320px; transform: translateX(-100%); z-index: 2000; box-shadow: 10px 0 25px rgba(0,0,0,0.5); }
@@ -1258,7 +1282,6 @@ class NightlightDashboard extends LitElement {
         .header-titles h1 { font-size: 1.4rem; }
         .tg-col-head { font-size: 0.8rem; text-overflow: ellipsis; overflow: hidden; padding: 8px 2px; }
         .content-body { padding: 0 16px 16px 16px; }
-        :host([mode="core"]) .sidebar { display: flex !important; }
       }
     `;
   }
@@ -1283,32 +1306,68 @@ class NightlightCardEditor extends LitElement {
   _valueChanged(ev) {
     if (!this._config || !this.hass) return;
     const target = ev.target;
-    const field = target.configValue; // Use configValue property on standard elements
+    const field = target.configValue; 
     const value = target.value;
     if (field) this._updateConfig({ [field]: value });
+  }
+
+  static get styles() {
+      return css`
+      .editor-container { padding: 16px; font-family: var(--paper-font-body1_-_font-family); }
+      .editor-section { background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+      .editor-section h3 { margin-top: 0; margin-bottom: 16px; font-weight: 500; color: var(--primary-color); border-bottom: 1px solid var(--divider-color); padding-bottom: 8px; }
+      .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+      .full-width { grid-column: 1 / -1; }
+      .info-box { background: var(--secondary-background-color); padding: 12px; border-radius: 4px; font-size: 0.9em; margin-top: 16px; border-left: 4px solid var(--primary-color); }
+      `;
   }
 
   render() {
     if (!this.hass || !this._config) return html``;
     return html`
-      <div class="card-config">
-        <h3>Dashboard Settings</h3>
-        <ha-textfield label="Title" .value="${this._config.title}" .configValue="${'title'}" @input="${this._valueChanged}"></ha-textfield>
-        <ha-textfield label="Logo URL" .value="${this._config.logo_url}" .configValue="${'logo_url'}" @input="${this._valueChanged}"></ha-textfield>
-        
-        <h3>Navigation & Control</h3>
-        <ha-entity-picker .hass="${this.hass}" label="View Controller (input_select)" .value="${this._config.view_controller}" .configValue="${'view_controller'}" .includeDomains="${['input_select']}" @value-changed="${(e) => this._updateConfig({view_controller: e.detail.value})}"></ha-entity-picker>
-        
-        <h3>Modules</h3>
-        <ha-entity-picker .hass="${this.hass}" label="Notes List (todo)" .value="${this._config.notes_entity}" @value-changed="${(e) => this._updateConfig({notes_entity: e.detail.value})}"></ha-entity-picker>
-        
-        <h3>Theme</h3>
-        <div style="margin-top: 10px;">
-           <label>Force Theme:</label>
-           <select .value="${this._config.theme || 'light'}" @change="${(e) => this._updateConfig({theme: e.target.value})}">
-             <option value="light">Light</option>
-             <option value="dark">Dark</option>
-           </select>
+      <div class="editor-container">
+        <div class="editor-section">
+            <h3>General Settings</h3>
+            <div class="form-grid">
+                <ha-textfield label="Dashboard Title" .value="${this._config.title}" .configValue="${'title'}" @input="${this._valueChanged}"></ha-textfield>
+                <ha-textfield label="Logo URL" .value="${this._config.logo_url}" .configValue="${'logo_url'}" @input="${this._valueChanged}"></ha-textfield>
+                
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                   <label>Theme</label>
+                   <select .value="${this._config.theme || 'light'}" @change="${(e) => this._updateConfig({theme: e.target.value})}" style="padding: 10px; border-radius: 4px; border: 1px solid var(--divider-color);">
+                     <option value="light">Light Mode</option>
+                     <option value="dark">Dark Mode</option>
+                   </select>
+                </div>
+            </div>
+        </div>
+
+        <div class="editor-section">
+            <h3>Integrations</h3>
+            <div class="form-grid">
+                <ha-entity-picker 
+                    .hass="${this.hass}" 
+                    label="View Controller" 
+                    .value="${this._config.view_controller}" 
+                    .configValue="${'view_controller'}" 
+                    .includeDomains="${['input_select']}" 
+                    @value-changed="${(e) => this._updateConfig({view_controller: e.detail.value})}">
+                </ha-entity-picker>
+                
+                <ha-entity-picker 
+                    .hass="${this.hass}" 
+                    label="Family Notes List" 
+                    .value="${this._config.notes_entity}" 
+                    .configValue="${'notes_entity'}" 
+                    .includeDomains="${['todo']}"
+                    @value-changed="${(e) => this._updateConfig({notes_entity: e.detail.value})}">
+                </ha-entity-picker>
+            </div>
+        </div>
+
+        <div class="info-box">
+           <strong>Advanced Configuration:</strong> Entities, Chores, Meal Plans, and Custom Navigation must be configured via YAML code editor. 
+           See documentation for structure.
         </div>
       </div>
     `;
