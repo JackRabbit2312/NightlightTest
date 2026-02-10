@@ -579,7 +579,7 @@ class NightlightDashboard extends LitElement {
          if (this._calendarMode === 'month') return this._renderMonthGrid();
          if (this._calendarMode === 'agenda') return this._renderAgenda();
          return this._renderTimeGrid(this._calendarMode === 'week' ? 7 : 1);
-      default: return html`<div class="placeholder-view">View: ${this._activeView} active</div>`;
+      default: return html`<div class="placeholder-view"></div>`;
     }
   }
 
