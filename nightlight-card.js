@@ -1248,12 +1248,12 @@ class NightlightCardEditor extends LitElement {
   }
 }
 
-customElements.define("nightlight-calendar-card", NightlightDashboard);
-customElements.define("nightlight-card-editor", NightlightCardEditor);
+customElements.define("nightlight-dashboard-card", NightlightDashboard);
+customElements.define("nightlight-dashboard-editor", NightlightCardEditor);
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: "nightlight-calendar-card",
+  type: "nightlight-dashboard-card",
   name: "Nightlight Dashboard",
   description: "Advanced Family Hub with Calendar, Chores & Meals"
 });
