@@ -1,5 +1,5 @@
 /**
- * Nightlight Dashboard (v2.0.0 - Refined)
+ * Nightlight Dashboard (v2.1.0 - Refined)
  * A modernize, streamlined Home Assistant card with To-do memory, 
  * User-Specific Views, and Hybrid Controller logic.
  */
@@ -25,7 +25,8 @@ class NightlightDashboard extends LitElement {
       _showAddModal: { type: Boolean },
       _menuOpen: { type: Boolean },
       _todoItems: { type: Array },
-      _weatherEntity: { type: String }
+      _weatherEntity: { type: String },
+      _themeMode: { type: String }
     };
   }
 
@@ -55,6 +56,7 @@ class NightlightDashboard extends LitElement {
     this._showAddModal = false;
     this._menuOpen = false;
     this._lastResetDate = localStorage.getItem('nightlight_reset_date');
+    this._themeMode = null; // Auto
   }
 
   setConfig(config) {
@@ -78,7 +80,7 @@ class NightlightDashboard extends LitElement {
     if (changedProps.has('_activeView')) {
       const coreIds = ['calendar', 'meals', 'whiteboard', 'chores'];
 
-      // Control host sizing via attribute for interaction fix
+      // Control host sizing via attribute
       if (coreIds.includes(this._activeView)) {
         this.setAttribute('mode', 'core');
       } else {
@@ -88,7 +90,6 @@ class NightlightDashboard extends LitElement {
       // Handle View Controller Input Select
       if (this.config.view_controller && this.hass) {
         const option = coreIds.includes(this._activeView) ? "Nightlight" : this._activeView;
-        // Check current state to avoid loop
         const currentState = this.hass.states[this.config.view_controller]?.state;
         if (currentState !== option) {
            this.hass.callService('input_select', 'select_option', {
@@ -100,6 +101,11 @@ class NightlightDashboard extends LitElement {
 
       if (this._activeView === 'whiteboard') this._fetchNotes(this.config.notes_entity);
       if (this._activeView === 'chores') this._fetchChoreData();
+      
+      // Force refresh events if switching to agenda to ensure we have 30 days
+      if (this._activeView === 'calendar' && this._calendarMode === 'agenda') {
+          this._fetchEvents();
+      }
     }
 
     // 2. Data Refresh Logic
@@ -113,8 +119,6 @@ class NightlightDashboard extends LitElement {
           this._fetchNotes(this.config.notes_entity);
         }
         if (this._activeView === 'chores') {
-          // Optional: intelligent refresh only if chores entities change
-          // For now, keeping it simple as per original
           this._fetchChoreData();
         }
       }
@@ -151,7 +155,7 @@ class NightlightDashboard extends LitElement {
       }
     }
     this._todoItems = allItems;
-    this.requestUpdate(); // Force render
+    this.requestUpdate(); 
   }
 
   async _checkDailyReset() {
@@ -161,7 +165,6 @@ class NightlightDashboard extends LitElement {
     if (this._lastResetDate !== today) {
       for (const kid of this.config.chores) {
         if (kid.todo_list && this.hass.states[kid.todo_list]) {
-          // Fetch current items to see what is completed
           try {
              const result = await this.hass.callWS({
                 type: "todo/item/list",
@@ -199,7 +202,6 @@ class NightlightDashboard extends LitElement {
 
   async _toggleTodo(entityId, taskLabel, isDone) {
     if (!entityId) return;
-    // Find the item to get its UID if possible, otherwise use summary
     const existingItem = this._todoItems.find(i => 
       i.list_id === entityId && 
       i.summary.trim().toLowerCase() === taskLabel.trim().toLowerCase()
@@ -209,9 +211,7 @@ class NightlightDashboard extends LitElement {
     const newStatus = isDone ? 'needs_action' : 'completed';
 
     try {
-      // Optimistic update
       this.requestUpdate(); 
-      
       await this.hass.callService('todo', 'update_item', {
         entity_id: entityId,
         item: identifier,
@@ -239,7 +239,14 @@ class NightlightDashboard extends LitElement {
     let start = new Date(this._referenceDate);
     let end = new Date(this._referenceDate);
 
-    if (this._calendarMode === 'month') {
+    // Agenda: Fetch 30 days from today always
+    if (this._calendarMode === 'agenda') {
+        start = new Date();
+        start.setHours(0,0,0,0);
+        end = new Date(start);
+        end.setDate(start.getDate() + 30);
+    } 
+    else if (this._calendarMode === 'month') {
       start = new Date(this._referenceDate.getFullYear(), this._referenceDate.getMonth(), 1);
       end = new Date(this._referenceDate.getFullYear(), this._referenceDate.getMonth() + 1, 0, 23, 59, 59);
     } else if (this._calendarMode === 'week') {
@@ -266,7 +273,8 @@ class NightlightDashboard extends LitElement {
             ...e,
             color: ent.color || '#7b61ff',
             origin: ent.entity,
-            friendly_name: (stateObj && stateObj.attributes) ? stateObj.attributes.friendly_name : ent.entity
+            friendly_name: (stateObj && stateObj.attributes) ? stateObj.attributes.friendly_name : ent.entity,
+            icon: (stateObj && stateObj.attributes) ? stateObj.attributes.icon : null
           };
         }))
         .catch(() => []);
@@ -313,6 +321,11 @@ class NightlightDashboard extends LitElement {
     else this._calendarMode = 'agenda';
   }
 
+  _toggleTheme() {
+      this._themeMode = this._themeMode === 'dark' ? 'light' : 'dark';
+      this.requestUpdate();
+  }
+
   async _submitEvent() {
     const root = this.shadowRoot;
     const summary = root.getElementById('new_summary').value;
@@ -344,8 +357,6 @@ class NightlightDashboard extends LitElement {
       console.error("Failed to create event:", e);
     }
   }
-
-  // --- Utility Functions ---
 
   _isPast(event) {
     const end = new Date(event.end.dateTime || event.end.date);
@@ -420,9 +431,11 @@ class NightlightDashboard extends LitElement {
     const customNav = this.config.navigation || [];
     const notesState = this.hass.states[this.config.notes_entity];
     const hasNewNotes = notesState ? (new Date() - new Date(notesState.last_changed)) < (60 * 60 * 1000) : false;
+    
+    const activeTheme = this._themeMode || this.config.theme;
 
     return html`
-      <div class="nightlight-hub ${this.config.theme} ${isCoreMode ? 'mode-core' : 'mode-section'} ${this._menuOpen ? 'menu-open' : ''}">
+      <div class="nightlight-hub ${activeTheme} ${isCoreMode ? 'mode-core' : 'mode-section'} ${this._menuOpen ? 'menu-open' : ''}">
         
         <!-- SIDEBAR -->
         <nav class="sidebar">
@@ -487,6 +500,9 @@ class NightlightDashboard extends LitElement {
             <div class="header-right">
               ${this._activeView === 'calendar' ? html`
                   <div class="calendar-controls">
+                    <button class="theme-btn" @click="${this._toggleTheme}" title="Toggle Theme">
+                         <ha-icon icon="mdi:theme-light-dark"></ha-icon>
+                    </button>
                     <div class="view-toggles">
                       ${['month', 'week', 'day', 'agenda'].map(m => html`
                         <button class="${this._calendarMode === m ? 'active' : ''}" 
@@ -497,14 +513,20 @@ class NightlightDashboard extends LitElement {
                     </div>
                     <button class="today-btn" @click="${() => { this._referenceDate = new Date(); }}">Today</button>
                     <div class="persona-stack">
-                      ${(this.config.entities || []).filter(e => e.entity.startsWith('calendar')).map(ent => html`
+                      ${(this.config.entities || []).filter(e => e.entity.startsWith('calendar')).map(ent => {
+                        const cal = this._events.find(ev => ev.origin === ent.entity) || {};
+                        const icon = ent.icon || cal.icon;
+                        const initial = ent.name ? ent.name[0] : (cal.friendly_name ? cal.friendly_name[0] : 'C');
+                        
+                        return html`
                         <div class="persona-dot ${this._activeCalendars.includes(ent.entity) ? 'active' : 'inactive'}" 
-                             style="background: ${ent.color}" 
+                             style="background: ${ent.color}; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold;" 
                              title="${ent.entity}"
                              @click="${() => this._togglePersona(ent.entity)}">
-                          ${ent.picture ? html`<img src="${ent.picture}">` : ''}
+                          ${ent.picture ? html`<img src="${ent.picture}">` : 
+                             (icon ? html`<ha-icon icon="${icon}" style="--mdc-icon-size: 16px;"></ha-icon>` : initial)}
                         </div>
-                      `)}
+                      `})}
                     </div>
                   </div>
               ` : ''}
@@ -555,8 +577,6 @@ class NightlightDashboard extends LitElement {
       default: return html`<div class="placeholder-view">View: ${this._activeView} active</div>`;
     }
   }
-
-  // --- Sub-Renderers ---
 
   _renderMealPlanner() {
     const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -737,18 +757,20 @@ class NightlightDashboard extends LitElement {
               const isToday = this._isToday(d.date);
               const events = this._events.filter(e => {
                  if (!this._activeCalendars.includes(e.origin)) return false;
-                 // Simple day check (not accurate for multi-day in month view for brevity, but functional)
                  const eStart = new Date(e.start.dateTime || e.start.date);
                  return eStart.toDateString() === dateStr;
-              }).slice(0, 4);
+              }); // Limit in rendering, not filter
 
               return html`
                 <div class="cal-day ${isToday ? 'today' : ''}" @click="${() => this._handleMonthDayClick(d.date, events.length)}">
                    <span class="day-number">${d.date}</span>
-                   <div class="day-events">
-                     ${events.map(e => html`
-                       <div class="evt-dot" style="background-color: ${e.color}" title="${e.summary}"></div>
+                   <div class="day-events-list">
+                     ${events.slice(0, 4).map(e => html`
+                       <div class="evt-pill" style="background-color: ${e.color}" title="${e.summary}">
+                         ${e.summary}
+                       </div>
                      `)}
+                     ${events.length > 4 ? html`<div class="evt-more">+${events.length - 4}</div>` : ''}
                    </div>
                 </div>
               `;
@@ -761,28 +783,72 @@ class NightlightDashboard extends LitElement {
   _renderAgenda() {
     const today = new Date();
     today.setHours(0,0,0,0);
-    const frags = this._fragmentEvents(this._events);
-    const list = frags.filter(e => this._activeCalendars.includes(e.origin) && new Date(e.displayDate) >= today)
-      .sort((a,b) => new Date(a.displayDate) - new Date(b.displayDate));
+    const endWindow = new Date(today);
+    endWindow.setDate(today.getDate() + 30);
+
+    const relevantEvents = this._events.filter(e => this._activeCalendars.includes(e.origin));
+    let feedItems = [];
+
+    relevantEvents.forEach(e => {
+       const start = new Date(e.start.dateTime || e.start.date);
+       const end = new Date(e.end.dateTime || e.end.date);
+       // Normalize multi-day check
+       const isMultiDay = (end.getTime() - start.getTime()) > 86400000;
+       
+       if (end < today || start > endWindow) return; // Out of range
+
+       // 1. Start Entry
+       if (start >= today) {
+          feedItems.push({
+             type: 'start',
+             date: start,
+             event: e,
+             isMultiDay
+          });
+       }
+
+       // 2. End Entry for MultiDay
+       if (isMultiDay && end <= endWindow && end >= today) {
+          feedItems.push({
+             type: 'end',
+             date: end,
+             event: e
+          });
+       }
+    });
+
+    feedItems.sort((a,b) => a.date - b.date);
 
     return html`
-      <div class="agenda-list">
-        ${list.map(e => {
-           const d = new Date(e.displayDate);
+      <div class="agenda-feed">
+        ${feedItems.map(item => {
+           const d = item.date;
+           const e = item.event;
+           const isStart = item.type === 'start';
+           const label = isStart ? (item.isMultiDay ? 'Starts: ' + e.summary : e.summary) : 'Ends: ' + e.summary;
+           
            return html`
-             <div class="agenda-item" @click="${() => this._selectedEvent = e}">
-               <div class="agenda-date-box">
-                 <span class="d-day">${d.getDate()}</span>
-                 <span class="d-mon">${d.toLocaleDateString('default', {month:'short'})}</span>
-               </div>
-               <div class="agenda-details" style="border-left-color: ${e.color}">
-                 <div class="ag-title">${e.summary}</div>
-                 <div class="ag-sub">${e.friendly_name} • ${e.isAllDay ? 'All Day' : new Date(e.start.dateTime).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div>
-               </div>
+             <div class="feed-item ${!isStart ? 'feed-end' : ''}" @click="${() => this._selectedEvent = e}">
+                <div class="feed-date">
+                   <span class="fd-day">${d.getDate()}</span>
+                   <span class="fd-mon">${d.toLocaleDateString('default', {month:'short'})}</span>
+                </div>
+                <div class="feed-content-wrapper" style="border-left: 4px solid ${e.color};">
+                   <div class="feed-content">
+                      <div class="feed-title">${label}</div>
+                      <div class="feed-time">
+                        ${e.isAllDay ? 'All Day' : d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
+                        ${!isStart ? ' (Finish)' : ''}
+                      </div>
+                   </div>
+                   ${item.isMultiDay && isStart ? html`<div class="connector-line" style="background: ${e.color}"></div>` : ''}
+                </div>
              </div>
            `;
         })}
-      </div>`;
+        ${feedItems.length === 0 ? html`<div class="empty-state">No upcoming events in next 30 days.</div>` : ''}
+      </div>
+    `;
   }
 
   _renderTimeGrid(daysCount) {
@@ -796,7 +862,7 @@ class NightlightDashboard extends LitElement {
      const frags = this._fragmentEvents(this._events, start);
 
      return html`
-       <div class="time-grid">
+       <div class="time-grid no-scrollbar">
          <!-- Header -->
          <div class="tg-header">
            <div class="tg-gutter"></div>
@@ -820,7 +886,7 @@ class NightlightDashboard extends LitElement {
             </div>
          </div>
          <!-- Scrollable Body -->
-         <div class="tg-body">
+         <div class="tg-body no-scrollbar">
             <div class="tg-time-axis">
                ${hours.map(h => html`<div class="tg-hour-marker"><span>${h}:00</span></div>`)}
             </div>
@@ -923,15 +989,24 @@ class NightlightDashboard extends LitElement {
         font-family: var(--paper-font-body1_-_font-family);
         overflow: hidden;
       }
+      
+      .nightlight-hub.dark {
+        --nl-bg: #1e1e1e;
+        --nl-fg: #e0e0e0;
+        --nl-fg-sec: #9e9e9e;
+        --nl-border: #333;
+      }
 
       /* Hybrid Mode Styling */
       :host([mode="section"]) { 
         height: auto; 
         background: transparent;
       }
-      :host([mode="section"]) .sidebar,
-      :host([mode="section"]) .desktop-toggle,
-      :host([mode="section"]) .mobile-toggle { display: none !important; }
+      /* In section mode, hide permanent sidebar but allow toggles */
+      :host([mode="section"]) .sidebar { transform: translateX(-100%); position: fixed; inset: 0; z-index: 2000; box-shadow: 2px 0 10px rgba(0,0,0,0.5); display: flex !important; }
+      :host([mode="section"]) .menu-open .sidebar { transform: translateX(0); }
+      :host([mode="section"]) .desktop-toggle { display: none !important; }
+      :host([mode="section"]) .mobile-toggle { display: block !important; }
       :host([mode="section"]) .stage { padding: 0; }
       :host([mode="section"]) .nightlight-hub { display: block; }
       
@@ -939,6 +1014,7 @@ class NightlightDashboard extends LitElement {
         display: flex;
         height: 100%;
         width: 100%;
+        color: var(--nl-fg);
       }
 
       /* Sidebar */
@@ -980,7 +1056,7 @@ class NightlightDashboard extends LitElement {
         text-align: left;
         font-size: 0.95rem;
       }
-      .nav-item:hover { background: rgba(0,0,0,0.03); color: var(--nl-fg); }
+      .nav-item:hover { background: rgba(255,255,255,0.05); color: var(--nl-fg); }
       .nav-item.active { background: rgba(var(--rgb-primary-color), 0.1); color: var(--nl-accent); font-weight: 600; }
       .nav-icon-container { position: relative; display: flex; align-items: center;}
       .badge { position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; background: #f44336; border-radius: 50%; }
@@ -999,12 +1075,13 @@ class NightlightDashboard extends LitElement {
         flex-shrink: 0;
       }
       .header-left { display: flex; align-items: center; gap: 16px; }
-      .desktop-toggle { margin-left: -8px; }
+      .desktop-toggle { margin-left: -8px; color: var(--nl-fg); }
       .header-titles h1 { margin: 0; font-size: 1.5rem; font-weight: 600; color: var(--nl-fg); }
       .subtitle { display: flex; align-items: center; gap: 12px; color: var(--nl-fg-sec); font-size: 0.9rem; margin-top: 4px; }
       .clock { font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; }
       .nav-controls button { background: none; border: 1px solid var(--nl-border); border-radius: 4px; cursor: pointer; color: var(--nl-fg); padding: 2px; }
       
+      .theme-btn { background: none; border: none; color: var(--nl-fg); cursor: pointer; margin-right: 8px; }
       .view-toggles { background: var(--secondary-background-color); padding: 4px; border-radius: 8px; display: flex; gap: 2px; }
       .view-toggles button {
         border: none; background: none; padding: 6px 12px; border-radius: 6px; 
@@ -1014,8 +1091,8 @@ class NightlightDashboard extends LitElement {
       .today-btn { background: none; border: 1px solid var(--nl-border); padding: 6px 12px; border-radius: 6px; cursor: pointer; color: var(--nl-fg); font-weight: 600; font-size: 0.8rem; margin: 0 12px; }
       
       .persona-stack { display: flex; gap: -4px; }
-      .persona-dot { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--nl-bg); cursor: pointer; transition: transform 0.2s; opacity: 0.5; overflow: hidden; }
-      .persona-dot.active { opacity: 1; transform: scale(1.1); z-index: 10; }
+      .persona-dot { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--nl-bg); cursor: pointer; transition: transform 0.2s; opacity: 0.7; overflow: hidden; }
+      .persona-dot.active { opacity: 1; transform: scale(1.1); z-index: 10; border-color: var(--nl-accent); }
       .persona-dot img { width: 100%; height: 100%; object-fit: cover; }
 
       .content-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 24px; box-sizing: border-box; }
@@ -1024,19 +1101,23 @@ class NightlightDashboard extends LitElement {
       .calendar-month { height: 100%; display: flex; flex-direction: column; background: var(--nl-bg); border-radius: var(--nl-radius); border: 1px solid var(--nl-border); overflow: hidden; }
       .cal-header-row { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; padding: 12px 0; border-bottom: 1px solid var(--nl-border); font-weight: 600; color: var(--nl-fg-sec); font-size: 0.8rem; }
       .cal-grid { flex: 1; display: grid; grid-template-columns: repeat(7, 1fr); grid-auto-rows: 1fr; }
-      .cal-day { border-right: 1px solid var(--nl-border); border-bottom: 1px solid var(--nl-border); padding: 8px; cursor: pointer; transition: background 0.1s; display: flex; flex-direction: column; gap: 4px; }
+      .cal-day { border-right: 1px solid var(--nl-border); border-bottom: 1px solid var(--nl-border); padding: 4px; cursor: pointer; transition: background 0.1s; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
       .cal-day:hover { background: rgba(0,0,0,0.02); }
       .cal-day.today { background: rgba(var(--rgb-primary-color), 0.05); }
       .cal-day.today .day-number { color: var(--nl-accent); font-weight: 800; }
-      .day-number { font-size: 0.9rem; color: var(--nl-fg); }
-      .day-events { display: flex; flex-wrap: wrap; gap: 4px; }
-      .evt-dot { width: 8px; height: 8px; border-radius: 50%; }
+      .day-number { font-size: 0.8rem; color: var(--nl-fg); padding: 2px 4px; }
+      .day-events-list { display: flex; flex-direction: column; gap: 2px; }
+      .evt-pill { font-size: 10px; padding: 1px 4px; border-radius: 3px; color: #fff; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 1.2; }
+      .evt-more { font-size: 9px; color: var(--nl-fg-sec); text-align: center; }
 
       /* Time Grid */
-      .time-grid { display: flex; flex-direction: column; height: 100%; border: 1px solid var(--nl-border); border-radius: var(--nl-radius); background: var(--nl-bg); }
+      .time-grid { display: flex; flex-direction: column; height: 100%; border: 1px solid var(--nl-border); border-radius: var(--nl-radius); background: var(--nl-bg); overflow: hidden; }
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      
       .tg-header { display: flex; border-bottom: 1px solid var(--nl-border); }
       .tg-gutter { width: 50px; flex-shrink: 0; border-right: 1px solid var(--nl-border); }
-      .tg-col-head { flex: 1; text-align: center; padding: 8px; font-weight: 600; font-size: 0.9rem; border-right: 1px solid var(--nl-border); }
+      .tg-col-head { flex: 1; text-align: center; padding: 8px; font-weight: 600; font-size: 0.9rem; border-right: 1px solid var(--nl-border); color: var(--nl-fg); }
       .tg-allday { display: flex; border-bottom: 2px solid var(--nl-border); min-height: 30px; }
       .tg-gutter-label { width: 50px; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; color: var(--nl-fg-sec); border-right: 1px solid var(--nl-border); }
       .tg-allday-cols { flex: 1; display: grid; }
@@ -1051,15 +1132,19 @@ class NightlightDashboard extends LitElement {
       .tg-grid-line { height: 60px; border-bottom: 1px solid var(--nl-border); box-sizing: border-box; }
       .tg-event { position: absolute; left: 2px; right: 2px; padding: 4px; border-radius: 4px; font-size: 0.75rem; color: #fff; overflow: hidden; cursor: pointer; z-index: 10; border: 1px solid rgba(255,255,255,0.3); }
 
-      /* Agenda */
-      .agenda-list { display: flex; flex-direction: column; gap: 8px; }
-      .agenda-item { display: flex; background: var(--nl-bg); padding: 12px; border-radius: var(--nl-radius); border: 1px solid var(--nl-border); cursor: pointer; align-items: center; gap: 16px; }
-      .agenda-date-box { display: flex; flex-direction: column; align-items: center; min-width: 40px; }
-      .d-day { font-size: 1.4rem; font-weight: 700; color: var(--nl-fg); line-height: 1; }
-      .d-mon { font-size: 0.7rem; text-transform: uppercase; color: var(--nl-fg-sec); font-weight: 600; }
-      .agenda-details { border-left: 4px solid transparent; padding-left: 12px; flex: 1; }
-      .ag-title { font-weight: 600; font-size: 1rem; color: var(--nl-fg); }
-      .ag-sub { font-size: 0.8rem; color: var(--nl-fg-sec); margin-top: 2px; }
+      /* Agenda Feed */
+      .agenda-feed { display: flex; flex-direction: column; gap: 12px; }
+      .feed-item { display: flex; gap: 16px; align-items: stretch; cursor: pointer; }
+      .feed-date { display: flex; flex-direction: column; align-items: center; min-width: 50px; padding-top: 4px; }
+      .fd-day { font-size: 1.5rem; font-weight: 700; color: var(--nl-fg); line-height: 1; }
+      .fd-mon { font-size: 0.8rem; text-transform: uppercase; color: var(--nl-accent); font-weight: 600; }
+      .feed-content-wrapper { flex: 1; background: var(--nl-bg); border-radius: 8px; border: 1px solid var(--nl-border); padding: 12px; position: relative; display: flex; flex-direction: column; }
+      .feed-content { display: flex; justify-content: space-between; align-items: center; }
+      .feed-title { font-weight: 600; font-size: 1rem; color: var(--nl-fg); }
+      .feed-time { font-size: 0.85rem; color: var(--nl-fg-sec); }
+      .feed-end .feed-date { opacity: 0.5; }
+      .feed-end .feed-title { color: var(--nl-fg-sec); font-style: italic; }
+      .connector-line { position: absolute; left: -21px; top: 30px; bottom: -30px; width: 4px; opacity: 0.3; z-index: 0; }
 
       /* Modules: Chores, Meals, Notes */
       .chore-dashboard { height: 100%; display: flex; flex-direction: column; }
@@ -1112,7 +1197,7 @@ class NightlightDashboard extends LitElement {
         .desktop-toggle { display: none; }
         .stage-header { padding-left: 50px; }
         .tg-col-head { font-size: 0.7rem; text-overflow: ellipsis; overflow: hidden; }
-        :host([mode="core"]) .sidebar { display: flex !important; } /* Ensure sidebar works in core mode on mobile */
+        :host([mode="core"]) .sidebar { display: flex !important; }
       }
     `;
   }
@@ -1163,12 +1248,12 @@ class NightlightCardEditor extends LitElement {
   }
 }
 
-customElements.define("nightlight-dashboard", NightlightDashboard);
-customElements.define("nightlight-dashboard-editor", NightlightCardEditor);
+customElements.define("nightlight-calendar-card", NightlightDashboard);
+customElements.define("nightlight-card-editor", NightlightCardEditor);
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: "nightlight-dashboard",
+  type: "nightlight-calendar-card",
   name: "Nightlight Dashboard",
   description: "Advanced Family Hub with Calendar, Chores & Meals"
 });
