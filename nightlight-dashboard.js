@@ -989,7 +989,7 @@ class NightlightDashboard extends LitElement {
 
   static get styles() {
     return css`
-      :host {
+            :host {
         /* SKYLIGHT LIGHT THEME */
         --nl-bg: #FFFFFF;
         --nl-surface: #F3F4F6;
@@ -1001,8 +1001,10 @@ class NightlightDashboard extends LitElement {
         --nl-radius: 12px;
         --nl-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
         
-        display: block;
-        height: 100%;
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 56px); /* Fix for height collapsing */
+        min-height: 600px;
         width: 100%;
         margin: 0;
         padding: 0;
@@ -1012,6 +1014,8 @@ class NightlightDashboard extends LitElement {
         overflow: hidden;
       }
       
+      * { box-sizing: border-box; }
+
       /* SKYLIGHT DARK THEME */
       .nightlight-hub.dark {
         --nl-bg: #111827;
@@ -1104,18 +1108,18 @@ class NightlightDashboard extends LitElement {
 
       /* Theme Switch Styling */
       .theme-switch {
-        width: 56px;
-        height: 32px;
+        width: 68px;
+        height: 38px;
         background: var(--nl-surface);
         border: 1px solid var(--nl-border);
-        border-radius: 20px;
+        border-radius: 24px;
         position: relative;
         cursor: pointer;
         transition: background 0.3s;
       }
       .switch-knob {
-        width: 24px;
-        height: 24px;
+        width: 30px;
+        height: 30px;
         background: var(--nl-fg);
         border-radius: 50%;
         position: absolute;
@@ -1127,7 +1131,7 @@ class NightlightDashboard extends LitElement {
         justify-content: center;
         color: var(--nl-bg);
       }
-      .dark .switch-knob { transform: translateX(24px); background: var(--nl-accent); color: #fff; }
+      .dark .switch-knob { transform: translateX(30px); background: var(--nl-accent); color: #fff; }
 
       .view-toggles { background: var(--nl-surface); padding: 4px; border-radius: 10px; display: flex; gap: 4px; border: 1px solid var(--nl-border); }
       .view-toggles button {
