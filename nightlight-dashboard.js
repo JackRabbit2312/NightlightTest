@@ -947,33 +947,53 @@ class NightlightDashboard extends LitElement {
   }
 
   async _syncRecipesFromWebsite() {
-    if (!this.config.website_url || this._directRecipesLoading) return;
+    if (this._directRecipesLoading) return;
     this._directRecipesLoading = true;
     this.requestUpdate();
 
-    try {
-      const baseUrl = this.config.website_url.replace(/\/$/, '');
-      const endpoint = `${baseUrl}/api/recipes`;
-      const response = await fetch(endpoint, {
-        headers: { 'Accept': 'application/json' }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        let list = [];
-        if (Array.isArray(data.recipes)) list = data.recipes;
-        else if (Array.isArray(data.items)) list = data.items;
-        else if (Array.isArray(data.documents)) list = data.documents;
-        else if (Array.isArray(data)) list = data;
+    const recipeSensorId = this.config.recipes_sensor || 'sensor.meal_planner_recipes';
 
-        const parsed = list.map(d => this._parseRecipeDoc(d)).filter(Boolean);
-        this._directRecipes = parsed;
+    // 1. Always trigger Home Assistant backend to refresh the recipes sensor (bypasses browser CORS entirely)
+    if (this.hass) {
+      try {
+        await this.hass.callService('homeassistant', 'update_entity', { entity_id: recipeSensorId });
+      } catch (e) {
+        console.warn("HA recipe sensor refresh:", e);
       }
-    } catch (e) {
-      console.warn("Direct website recipe fetch attempted:", e);
-    } finally {
+    }
+
+    // 2. Also attempt direct client-side fetch if website_url is configured and CORS is allowed
+    if (this.config.website_url) {
+      try {
+        const baseUrl = this.config.website_url.replace(/\/$/, '');
+        const endpoint = `${baseUrl}/api/recipes`;
+        const response = await fetch(endpoint, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          let list = [];
+          if (Array.isArray(data.recipes)) list = data.recipes;
+          else if (Array.isArray(data.items)) list = data.items;
+          else if (Array.isArray(data.documents)) list = data.documents;
+          else if (Array.isArray(data)) list = data;
+
+          const parsed = list.map(d => this._parseRecipeDoc(d)).filter(Boolean);
+          if (parsed.length > 0) {
+            this._directRecipes = parsed;
+          }
+        }
+      } catch (e) {
+        // Expected when CORS is not configured on the website backend; Home Assistant sensor handles it.
+        console.info("Direct browser fetch fallback (relying on Home Assistant sensor):", e.message || e);
+      }
+    }
+
+    setTimeout(() => {
       this._directRecipesLoading = false;
       this.requestUpdate();
-    }
+    }, 1000);
   }
 
   async _scheduleMeal(dateStr, recipeId) {
@@ -2411,11 +2431,20 @@ class NightlightCardEditor extends LitElement {
   }
 }
 
+// Register standard card tag
 if (!customElements.get("nightlight-dashboard-card")) {
   customElements.define("nightlight-dashboard-card", NightlightDashboard);
 }
+// Register test environment card tag
+if (!customElements.get("nightlight-dashboard-test")) {
+  customElements.define("nightlight-dashboard-test", NightlightDashboard);
+}
+// Register visual editor tags
 if (!customElements.get("nightlight-dashboard-editor")) {
   customElements.define("nightlight-dashboard-editor", NightlightCardEditor);
+}
+if (!customElements.get("nightlight-dashboard-test-editor")) {
+  customElements.define("nightlight-dashboard-test-editor", NightlightCardEditor);
 }
 
 window.customCards = window.customCards || [];
@@ -2423,4 +2452,9 @@ window.customCards.push({
   type: "nightlight-dashboard-card",
   name: "Nightlight Dashboard",
   description: "Advanced Family Hub with Calendar, Chores & Meals"
+});
+window.customCards.push({
+  type: "nightlight-dashboard-test",
+  name: "Nightlight Dashboard (Test)",
+  description: "Testing Environment for Nightlight Family Hub"
 });
