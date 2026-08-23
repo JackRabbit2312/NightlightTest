@@ -902,6 +902,35 @@ class NightlightDashboard extends LitElement {
 
     const recipes = Array.from(combinedMap.values()).sort((a, b) => a.title.localeCompare(b.title));
 
+    // Generate active week (Monday to Sunday) based on _mealReferenceDate
+    const ref = new Date(this._mealReferenceDate || new Date());
+    const dayOfWeek = ref.getDay(); // 0 is Sunday, 1 is Monday
+    const diffToMonday = ref.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+    const monday = new Date(ref);
+    monday.setDate(diffToMonday);
+    monday.setHours(0, 0, 0, 0);
+
+    const weekDays = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      weekDays.push(d);
+    }
+    const sunday = weekDays[6];
+
+    const now = new Date();
+    const nowDayOfWeek = now.getDay();
+    const nowMonday = new Date(now);
+    nowMonday.setDate(now.getDate() - nowDayOfWeek + (nowDayOfWeek === 0 ? -6 : 1));
+    nowMonday.setHours(0, 0, 0, 0);
+    const isCurrentWeek = monday.toDateString() === nowMonday.toDateString();
+
+    const startMonth = monday.toLocaleDateString('default', { month: 'short' });
+    const endMonth = sunday.toLocaleDateString('default', { month: 'short' });
+    const weekRangeLabel = startMonth === endMonth
+      ? `${startMonth} ${monday.getDate()} – ${sunday.getDate()}, ${sunday.getFullYear()}`
+      : `${startMonth} ${monday.getDate()} – ${endMonth} ${sunday.getDate()}, ${sunday.getFullYear()}`;
+
     // Support meal_entities (e.g. Monday: input_text.dinner_plan_monday)
     if (this.config.meal_entities && typeof this.config.meal_entities === 'object') {
       const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -941,35 +970,6 @@ class NightlightDashboard extends LitElement {
         }
       });
     }
-
-    // Generate active week (Monday to Sunday) based on _mealReferenceDate
-    const ref = new Date(this._mealReferenceDate || new Date());
-    const dayOfWeek = ref.getDay(); // 0 is Sunday, 1 is Monday
-    const diffToMonday = ref.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
-    const monday = new Date(ref);
-    monday.setDate(diffToMonday);
-    monday.setHours(0, 0, 0, 0);
-
-    const weekDays = [];
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(monday);
-      d.setDate(monday.getDate() + i);
-      weekDays.push(d);
-    }
-    const sunday = weekDays[6];
-
-    const now = new Date();
-    const nowDayOfWeek = now.getDay();
-    const nowMonday = new Date(now);
-    nowMonday.setDate(now.getDate() - nowDayOfWeek + (nowDayOfWeek === 0 ? -6 : 1));
-    nowMonday.setHours(0, 0, 0, 0);
-    const isCurrentWeek = monday.toDateString() === nowMonday.toDateString();
-
-    const startMonth = monday.toLocaleDateString('default', { month: 'short' });
-    const endMonth = sunday.toLocaleDateString('default', { month: 'short' });
-    const weekRangeLabel = startMonth === endMonth
-      ? `${startMonth} ${monday.getDate()} – ${sunday.getDate()}, ${sunday.getFullYear()}`
-      : `${startMonth} ${monday.getDate()} – ${endMonth} ${sunday.getDate()}, ${sunday.getFullYear()}`;
 
     const websiteUrl = this.config.website_url;
 
