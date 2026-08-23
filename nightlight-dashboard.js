@@ -32,6 +32,8 @@ class NightlightDashboard extends LitElement {
       _recipePickerDate: { type: String },
       _directRecipes: { type: Array },
       _directRecipesLoading: { type: Boolean },
+      _directMeals: { type: Array },
+      _directMealsLoading: { type: Boolean },
       _mealReferenceDate: { type: Object },
       _customMealModalDate: { type: String },
       _customMealInput: { type: String },
@@ -82,6 +84,8 @@ class NightlightDashboard extends LitElement {
     this._recipePickerDate = null;
     this._directRecipes = [];
     this._directRecipesLoading = false;
+    this._directMeals = [];
+    this._directMealsLoading = false;
     this._customMealModalDate = null;
     this._customMealInput = '';
     this._customMealCalories = '';
@@ -386,11 +390,17 @@ class NightlightDashboard extends LitElement {
     d.setDate(d.getDate() + (dir * 7));
     this._mealReferenceDate = d;
     this.requestUpdate();
+    if (this.config.website_url) {
+      this._syncMealsFromWebsite();
+    }
   }
 
   _resetMealWeek() {
     this._mealReferenceDate = new Date();
     this.requestUpdate();
+    if (this.config.website_url) {
+      this._syncMealsFromWebsite();
+    }
   }
 
   _togglePersona(id) {
@@ -885,6 +895,13 @@ class NightlightDashboard extends LitElement {
       }
     });
 
+    // Merge directly fetched website meals
+    (this._directMeals || []).forEach(m => {
+      if (m && m.date) {
+        mealsByDate[m.date] = m;
+      }
+    });
+
     const recipeSensorId = this.config.recipes_sensor || 'sensor.meal_planner_recipes';
     const recipesSensor = this.hass.states[recipeSensorId];
     const rawRecipes = this._extractRawList(recipesSensor);
@@ -931,8 +948,8 @@ class NightlightDashboard extends LitElement {
       ? `${startMonth} ${monday.getDate()} – ${sunday.getDate()}, ${sunday.getFullYear()}`
       : `${startMonth} ${monday.getDate()} – ${endMonth} ${sunday.getDate()}, ${sunday.getFullYear()}`;
 
-    // Support meal_entities (e.g. Monday: input_text.dinner_plan_monday)
-    if (this.config.meal_entities && typeof this.config.meal_entities === 'object') {
+    // Support meal_entities (e.g. Monday: input_text.dinner_plan_monday) ONLY for current active week
+    if (isCurrentWeek && this.config.meal_entities && typeof this.config.meal_entities === 'object') {
       const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       Object.keys(this.config.meal_entities).forEach(key => {
         const entId = this.config.meal_entities[key];
@@ -1079,7 +1096,11 @@ class NightlightDashboard extends LitElement {
                   <div class="meal-button-row">
                     <button class="btn-meal-search" @click="${() => this._openRecipePicker(dateStr)}" title="Search & Pick from All Recipes">
                       <ha-icon icon="mdi:magnify" style="--mdc-icon-size: 18px;"></ha-icon>
-                      <span>${meal && meal.recipeId ? 'Change Meal...' : 'Search All Recipes...'}</span>
+                      <span>${meal && meal.recipeId ? 'Change...' : 'Search Recipes...'}</span>
+                    </button>
+                    <button class="btn-meal-custom" @click="${() => this._openCustomMealModal(dateStr, recipeTitle)}" title="Add or edit custom meal item">
+                      <ha-icon icon="mdi:pencil-outline" style="--mdc-icon-size: 16px;"></ha-icon>
+                      <span>Custom</span>
                     </button>
                     ${meal && meal.recipeId ? html`
                       <button class="btn-meal-clear" @click="${() => this._scheduleMeal(dateStr, '')}" title="Clear planned meal">
@@ -1147,6 +1168,8 @@ class NightlightDashboard extends LitElement {
       } catch (err) {
         console.warn("Direct recipe API fetch:", err);
       }
+      // Also sync weekly meals
+      await this._syncMealsFromWebsite();
     }
 
     // 2. Refresh the sensor via Home Assistant server-side
@@ -1162,6 +1185,73 @@ class NightlightDashboard extends LitElement {
       this._directRecipesLoading = false;
       this.requestUpdate();
     }, 600);
+  }
+
+  async _syncMealsFromWebsite() {
+    const websiteUrl = this.config.website_url;
+    if (!websiteUrl) return;
+
+    this._directMealsLoading = true;
+    this.requestUpdate();
+
+    const cleanBase = websiteUrl.replace(/\/$/, '');
+    const endpoints = [
+      `${cleanBase}/api/weekly-meals`,
+      `${cleanBase}/api/meals`,
+      `${cleanBase}/api/meal-plan`,
+      `${cleanBase}/api/weekly_meals`
+    ];
+
+    let foundMeals = [];
+    for (const url of endpoints) {
+      try {
+        const res = await fetch(url, { method: 'GET', headers: { 'Accept': 'application/json' } });
+        if (res.ok) {
+          const data = await res.json();
+          let items = [];
+          if (Array.isArray(data)) {
+            items = data;
+          } else if (data && typeof data === 'object') {
+            if (Array.isArray(data.meals)) items = data.meals;
+            else if (Array.isArray(data.weekly_meals)) items = data.weekly_meals;
+            else if (Array.isArray(data.weeklyMeals)) items = data.weeklyMeals;
+            else if (Array.isArray(data.documents)) items = data.documents;
+            else if (Array.isArray(data.items)) items = data.items;
+            else {
+              const values = Object.entries(data).map(([k, v]) => {
+                if (v && typeof v === 'object' && !v.date && /^\d{4}-\d{2}-\d{2}$/.test(k)) {
+                  return { ...v, date: k, id: k };
+                }
+                return v;
+              });
+              if (values.length > 0 && values.some(v => v && (v.recipeTitle || v.title || v.recipeId || v.recipe_id))) {
+                items = values;
+              }
+            }
+          }
+
+          if (items && items.length > 0) {
+            const parsed = items.map(d => this._parseMealDoc(d)).filter(Boolean);
+            if (parsed.length > 0) {
+              foundMeals = parsed;
+              break;
+            }
+          }
+        }
+      } catch (err) {
+        // Fall through
+      }
+    }
+
+    if (foundMeals.length > 0) {
+      const directMap = new Map();
+      (this._directMeals || []).forEach(m => { if (m && m.date) directMap.set(m.date, m); });
+      foundMeals.forEach(m => { if (m && m.date) directMap.set(m.date, m); });
+      this._directMeals = Array.from(directMap.values());
+    }
+
+    this._directMealsLoading = false;
+    this.requestUpdate();
   }
 
   _openCustomMealModal(dateStr, defaultTitle = '') {
@@ -1262,6 +1352,28 @@ class NightlightDashboard extends LitElement {
         console.warn("HA rest_command meal upsert:", err);
       }
 
+      // Direct sync to website if website_url is configured
+      if (this.config.website_url) {
+        try {
+          const cleanBase = this.config.website_url.replace(/\/$/, '');
+          await fetch(`${cleanBase}/api/weekly-meals`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: dateStr,
+              date: dateStr,
+              recipeId: customId,
+              recipeTitle: customTitle,
+              prepTime: 0,
+              cookTime: customCookTime,
+              calories: customCalories
+            })
+          });
+        } catch (e) {
+          console.warn("Website direct custom meal sync:", e);
+        }
+      }
+
       // 4. Secondary: Try Home Assistant todo list / calendar service if configured
       if (this.config.meal_todo_list) {
         try {
@@ -1290,6 +1402,18 @@ class NightlightDashboard extends LitElement {
         await this.hass.callService('rest_command', 'meal_planner_delete_weekly_meal', { id: dateStr, date: dateStr });
       } catch (err) {
         console.warn("HA rest_command meal delete:", err);
+      }
+
+      // Direct sync delete to website if website_url is configured
+      if (this.config.website_url) {
+        try {
+          const cleanBase = this.config.website_url.replace(/\/$/, '');
+          await fetch(`${cleanBase}/api/weekly-meals/${dateStr}`, {
+            method: 'DELETE'
+          });
+        } catch (e) {
+          console.warn("Website direct meal delete sync:", e);
+        }
       }
     } else {
       const recipesSensor = this.hass.states[recipeSensorId];
@@ -1342,6 +1466,31 @@ class NightlightDashboard extends LitElement {
           });
         } catch (err) {
           console.warn("HA rest_command recipe meal upsert:", err);
+        }
+
+        // Direct sync to website if website_url is configured
+        if (this.config.website_url) {
+          try {
+            const cleanBase = this.config.website_url.replace(/\/$/, '');
+            await fetch(`${cleanBase}/api/weekly-meals`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                id: dateStr,
+                date: dateStr,
+                recipeId: recipe.id,
+                recipeTitle: recipe.title || "",
+                prepTime: recipe.prepTime || 0,
+                cookTime: recipe.cookTime || 0,
+                calories: recipe.macros?.calories || 0,
+                protein: recipe.macros?.protein || 0,
+                carbs: recipe.macros?.carbs || 0,
+                fat: recipe.macros?.fat || 0
+              })
+            });
+          } catch (e) {
+            console.warn("Website direct meal sync:", e);
+          }
         }
       }
     }
@@ -2555,9 +2704,11 @@ class NightlightDashboard extends LitElement {
       .meal-link-btn:hover { opacity: 1; }
       
       .meal-button-row { display: flex; gap: 8px; align-items: center; width: 100%; }
-      .btn-meal-search { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: var(--nl-surface); border: 1px solid var(--nl-border); padding: 8px 12px; border-radius: 8px; color: var(--nl-fg); font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+      .btn-meal-search { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: var(--nl-surface); border: 1px solid var(--nl-border); padding: 8px 12px; border-radius: 8px; color: var(--nl-fg); font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
       .btn-meal-search:hover { background: var(--nl-bg); border-color: var(--nl-accent); color: var(--nl-accent); }
-      .btn-meal-clear { background: var(--nl-surface); border: 1px solid var(--nl-border); color: #EF4444; border-radius: 8px; padding: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+      .btn-meal-custom { display: inline-flex; align-items: center; justify-content: center; gap: 4px; background: var(--nl-surface); border: 1px solid var(--nl-border); padding: 8px 10px; border-radius: 8px; color: var(--nl-fg); font-size: 0.82rem; font-weight: 600; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+      .btn-meal-custom:hover { border-color: var(--nl-accent); color: var(--nl-accent); background: var(--nl-bg); }
+      .btn-meal-clear { background: var(--nl-surface); border: 1px solid var(--nl-border); color: #EF4444; border-radius: 8px; padding: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; flex-shrink: 0; }
       .btn-meal-clear:hover { background: rgba(239, 68, 68, 0.1); border-color: #EF4444; }
 
       .meal-macros { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; align-items: center; }
@@ -2610,8 +2761,16 @@ class NightlightDashboard extends LitElement {
       /* Custom Meal Modal */
       .custom-meal-modal { max-width: 480px; }
       .custom-meal-modal-body { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+      .form-group { display: flex; flex-direction: column; gap: 6px; }
+      .form-group label { font-size: 0.85rem; font-weight: 600; color: var(--nl-fg); }
+      .form-input { width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--nl-border); background: var(--nl-surface); color: var(--nl-fg); font-family: inherit; font-size: 0.95rem; outline: none; transition: border-color 0.2s, box-shadow 0.2s; }
+      .form-input:focus { border-color: var(--nl-accent); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15); }
       .form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
       .custom-meal-hint { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: var(--nl-fg-sec); background: var(--nl-bg); padding: 10px 12px; border-radius: 8px; border: 1px solid var(--nl-border); margin: 0; line-height: 1.4; }
+      .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+      .btn-secondary { background: var(--nl-surface); border: 1px solid var(--nl-border); color: var(--nl-fg); padding: 10px 18px; border-radius: 10px; font-weight: 600; font-size: 0.9rem; cursor: pointer; transition: all 0.2s; }
+      .btn-secondary:hover { background: var(--nl-bg); border-color: var(--nl-fg-sec); }
+      .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
 
       /* Shopping List */
       .shopping-container { display: flex; flex-direction: column; gap: 24px; max-width: 600px; margin: 0 auto; width: 100%; }
