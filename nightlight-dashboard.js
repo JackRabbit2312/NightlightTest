@@ -34,6 +34,9 @@ class NightlightDashboard extends LitElement {
       _directRecipesLoading: { type: Boolean },
       _directMeals: { type: Array },
       _directMealsLoading: { type: Boolean },
+      _directShopping: { type: Array },
+      _directShoppingLoading: { type: Boolean },
+      _shoppingTodoItems: { type: Array },
       _mealReferenceDate: { type: Object },
       _customMealModalDate: { type: String },
       _customMealInput: { type: String },
@@ -86,6 +89,9 @@ class NightlightDashboard extends LitElement {
     this._directRecipesLoading = false;
     this._directMeals = [];
     this._directMealsLoading = false;
+    this._directShopping = [];
+    this._directShoppingLoading = false;
+    this._shoppingTodoItems = [];
     this._customMealModalDate = null;
     this._customMealInput = '';
     this._customMealCalories = '';
@@ -138,6 +144,12 @@ class NightlightDashboard extends LitElement {
 
       if (this._activeView === 'whiteboard') this._fetchNotes(this.config.notes_entity);
       if (this._activeView === 'chores') this._fetchChoreData();
+      if (this._activeView === 'shopping') {
+        this._fetchShoppingTodoItems();
+        if (this.config.website_url) {
+          this._syncShoppingListFromWebsite();
+        }
+      }
       if (this._activeView === 'meals' && this.config.website_url && (!this._directRecipes || this._directRecipes.length === 0)) {
         this._syncRecipesFromWebsite();
       }
@@ -1748,13 +1760,135 @@ class NightlightDashboard extends LitElement {
     return 'Other';
   }
 
+  async _fetchShoppingTodoItems() {
+    if (!this.hass) return;
+    const todoEntity = this.config.shopping_todo_list || 'todo.shopping_list';
+    if (!this.hass.states[todoEntity]) return;
+
+    try {
+      const res = await this.hass.callWS({
+        type: 'todo/item/list',
+        entity_id: todoEntity
+      });
+      if (res && Array.isArray(res.items)) {
+        this._shoppingTodoItems = res.items;
+        this.requestUpdate();
+      }
+    } catch (e) {
+      console.warn("Could not fetch todo.shopping_list items:", e);
+    }
+  }
+
+  async _syncShoppingListFromWebsite(forceRefresh = false) {
+    if (!this.config.website_url) return;
+    this._directShoppingLoading = true;
+    this.requestUpdate();
+
+    const cleanBase = this.config.website_url.replace(/\/$/, '');
+    const endpoints = [
+      `${cleanBase}/api/shopping-list`,
+      `${cleanBase}/api/shopping_list`,
+      `${cleanBase}/api/shopping`,
+      `${cleanBase}/api/grocery-list`,
+      `${cleanBase}/api/groceries`
+    ];
+
+    let fetchedItems = null;
+
+    for (const url of endpoints) {
+      try {
+        const response = await fetch(url, {
+          headers: { 'Accept': 'application/json' },
+          cache: forceRefresh ? 'no-cache' : 'default'
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (Array.isArray(data)) {
+            fetchedItems = data;
+            break;
+          } else if (data.shopping_list && Array.isArray(data.shopping_list)) {
+            fetchedItems = data.shopping_list;
+            break;
+          } else if (data.items && Array.isArray(data.items)) {
+            fetchedItems = data.items;
+            break;
+          } else if (data.groceries && Array.isArray(data.groceries)) {
+            fetchedItems = data.groceries;
+            break;
+          }
+        }
+      } catch (err) {
+        // Try next endpoint
+      }
+    }
+
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    if (fetchedItems && Array.isArray(fetchedItems)) {
+      // Retain existing manual items that are not completed/marked off
+      const existingManualItems = (this._directShopping || []).filter(item => {
+        return item.isManual && !item.checked;
+      });
+
+      // Filter website items: purge / override if older than 7 days
+      const validWebsiteItems = fetchedItems.map(item => {
+        let id = String(item.id || item._id || ('site-' + (item.name || item.title || Date.now())));
+        let rawName = String(item.name || item.title || 'Unknown');
+        let category = item.category || item.department || '';
+        let amount = typeof item.amount === 'number' ? item.amount : (typeof item.metricAmount === 'number' ? item.metricAmount : 1);
+        let unit = item.unit || item.metricUnit || '';
+        let checked = Boolean(item.checked === true || item.completed === true || item.status === 'completed');
+        let isManual = Boolean(item.isManual || /^\[(HA|MANUAL|M)\]/i.test(rawName) || id.startsWith('item-ha-'));
+        let dateVal = item.createdAt || item.date || item.timestamp || item.created_at || item.addedAt;
+
+        return {
+          id,
+          rawName,
+          category,
+          amount,
+          unit,
+          checked,
+          isManual,
+          dateVal
+        };
+      }).filter(item => {
+        // Manual items stay until marked off
+        if (item.isManual) return true;
+        // Check 7-day override rule for website items
+        if (item.dateVal) {
+          const time = new Date(item.dateVal).getTime();
+          if (!isNaN(time) && (now - time > SEVEN_DAYS_MS)) {
+            return false; // Exceeded 7 days -> drop / overridden
+          }
+        }
+        return true;
+      });
+
+      // Merge manual items with valid website items
+      const combinedMap = new Map();
+      existingManualItems.forEach(item => combinedMap.set(item.id, item));
+      validWebsiteItems.forEach(item => combinedMap.set(item.id, item));
+
+      this._directShopping = Array.from(combinedMap.values());
+    }
+
+    this._directShoppingLoading = false;
+    this.requestUpdate();
+  }
+
   _renderShoppingList() {
     const shoppingSensorId = this.config.shopping_sensor || 'sensor.meal_planner_shopping_list';
-    const shoppingSensor = this.hass.states[shoppingSensorId];
+    const shoppingSensor = this.hass?.states[shoppingSensorId];
     const rawDocs = this._extractRawList(shoppingSensor);
     if (rawDocs.length > 0) this._cachedShoppingDocs = rawDocs;
 
-    const items = (this._cachedShoppingDocs || []).map(doc => {
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const allItemsMap = new Map();
+
+    // 1. Process sensor / REST cached items
+    (this._cachedShoppingDocs || []).forEach(doc => {
       let id = "";
       let rawName = "Unknown";
       let preparation = "";
@@ -1762,6 +1896,7 @@ class NightlightDashboard extends LitElement {
       let amount = 1;
       let unit = "";
       let checked = false;
+      let dateVal = null;
 
       // Firestore REST structure
       const docId = doc.name ? doc.name.split('/').pop() : "";
@@ -1774,6 +1909,7 @@ class NightlightDashboard extends LitElement {
         amount = Number(f.metricAmount?.doubleValue ?? f.metricAmount?.integerValue ?? f.amount?.doubleValue ?? f.amount?.integerValue ?? 1);
         unit = f.metricUnit?.stringValue || f.unit?.stringValue || "";
         checked = f.checked?.booleanValue ?? (f.checked?.stringValue === 'true');
+        dateVal = f.createdAt?.stringValue || f.date?.stringValue || null;
       } else {
         // Standard clean REST JSON
         id = String(doc.id || docId || "");
@@ -1783,44 +1919,149 @@ class NightlightDashboard extends LitElement {
         amount = typeof doc.metricAmount === 'number' ? doc.metricAmount : (typeof doc.amount === 'number' ? doc.amount : 1);
         unit = doc.metricUnit || doc.unit || "";
         checked = Boolean(doc.checked === true || doc.checked === 'true' || doc.completed === true);
+        dateVal = doc.createdAt || doc.date || doc.timestamp || null;
       }
 
+      let isManual = false;
       let displayName = rawName;
-      const match = (typeof rawName === 'string') ? rawName.match(/^\[(.*?)\]\s*(.*)$/) : null;
-      if (match) {
-        if (!category) category = match[1];
-        displayName = match[2];
+
+      // Check and strip [HA], [MANUAL], [M] code so it is NEVER displayed in the card
+      const manualMatch = (typeof displayName === 'string') ? displayName.match(/^\[(HA|MANUAL|M)\]\s*(.*)$/i) : null;
+      if (manualMatch) {
+        isManual = true;
+        displayName = manualMatch[2];
+      } else if (doc.isManual || doc.is_manual || String(id).startsWith('item-ha-') || String(id).startsWith('manual-')) {
+        isManual = true;
       }
 
-      // Standard category normalization
-      if (category === "Dairy" || category === "Eggs") {
-        category = "Dairy & Eggs";
+      // Check category prefix like [Produce] Apples
+      const catMatch = (typeof displayName === 'string') ? displayName.match(/^\[(.*?)\]\s*(.*)$/) : null;
+      if (catMatch) {
+        if (!category) category = catMatch[1];
+        displayName = catMatch[2];
       }
 
-      if (!category || category === "Other") {
-        category = this._inferCategory(displayName);
+      // Override rule: website items > 7 days old are excluded
+      if (!isManual && dateVal) {
+        const time = new Date(dateVal).getTime();
+        if (!isNaN(time) && (now - time > SEVEN_DAYS_MS)) {
+          return; // Skip expired website item
+        }
       }
 
-      // Title case
+      if (category === "Dairy" || category === "Eggs") category = "Dairy & Eggs";
+      if (!category || category === "Other") category = this._inferCategory(displayName);
       if (typeof category === 'string') {
         category = category.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
       }
 
-      // Apply optimistic update
-      if (id && this._optimisticShoppingUpdates.has(id)) {
-        checked = this._optimisticShoppingUpdates.get(id);
-      }
-
-      return {
-        id: id || ('item-' + displayName),
+      const itemKey = id || ('item-' + displayName.toLowerCase().trim());
+      allItemsMap.set(itemKey, {
+        id: itemKey,
         rawName: rawName,
         name: displayName,
         preparation: preparation,
         department: category || "Other",
         amount: amount,
         unit: unit,
-        checked: checked
-      };
+        checked: checked,
+        isManual: isManual
+      });
+    });
+
+    // 2. Process direct website items (_directShopping)
+    (this._directShopping || []).forEach(item => {
+      let rawName = item.rawName || item.name || "Unknown";
+      let displayName = item.name || rawName;
+      let isManual = Boolean(item.isManual);
+
+      const manualMatch = (typeof displayName === 'string') ? displayName.match(/^\[(HA|MANUAL|M)\]\s*(.*)$/i) : null;
+      if (manualMatch) {
+        isManual = true;
+        displayName = manualMatch[2];
+      }
+
+      const catMatch = (typeof displayName === 'string') ? displayName.match(/^\[(.*?)\]\s*(.*)$/) : null;
+      let category = item.category || item.department || "";
+      if (catMatch) {
+        if (!category) category = catMatch[1];
+        displayName = catMatch[2];
+      }
+
+      if (!isManual && item.dateVal) {
+        const time = new Date(item.dateVal).getTime();
+        if (!isNaN(time) && (now - time > SEVEN_DAYS_MS)) {
+          return; // Skip expired website item
+        }
+      }
+
+      if (category === "Dairy" || category === "Eggs") category = "Dairy & Eggs";
+      if (!category || category === "Other") category = this._inferCategory(displayName);
+      if (typeof category === 'string') {
+        category = category.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+      }
+
+      const itemKey = item.id || ('site-' + displayName.toLowerCase().trim());
+      allItemsMap.set(itemKey, {
+        id: itemKey,
+        rawName: rawName,
+        name: displayName,
+        preparation: item.preparation || "",
+        department: category || "Other",
+        amount: item.amount || 1,
+        unit: item.unit || "",
+        checked: Boolean(item.checked),
+        isManual: isManual
+      });
+    });
+
+    // 3. Process todo.shopping_list items
+    (this._shoppingTodoItems || []).forEach(todoItem => {
+      const summary = todoItem.summary || todoItem.name || "";
+      if (!summary) return;
+
+      let isManual = false;
+      let displayName = summary;
+      const manualMatch = displayName.match(/^\[(HA|MANUAL|M)\]\s*(.*)$/i);
+      if (manualMatch) {
+        isManual = true;
+        displayName = manualMatch[2];
+      } else {
+        isManual = true; // Added in HA todo list -> treat as manual
+      }
+
+      let category = "Other";
+      const catMatch = displayName.match(/^\[(.*?)\]\s*(.*)$/);
+      if (catMatch) {
+        category = catMatch[1];
+        displayName = catMatch[2];
+      } else {
+        category = this._inferCategory(displayName);
+      }
+
+      const id = todoItem.uid || ('todo-' + displayName.toLowerCase().trim());
+      // Only add if not already present or update status
+      if (!allItemsMap.has(id)) {
+        allItemsMap.set(id, {
+          id: id,
+          rawName: summary,
+          name: displayName,
+          preparation: "",
+          department: category,
+          amount: 1,
+          unit: "",
+          checked: todoItem.status === 'completed',
+          isManual: isManual
+        });
+      }
+    });
+
+    // Convert map to array and apply optimistic updates
+    const items = Array.from(allItemsMap.values()).map(item => {
+      if (item.id && this._optimisticShoppingUpdates.has(item.id)) {
+        item.checked = this._optimisticShoppingUpdates.get(item.id);
+      }
+      return item;
     });
 
     // Sort: unchecked first, then department, then alphabetical
@@ -1837,19 +2078,39 @@ class NightlightDashboard extends LitElement {
     return html`
       <div class="shopping-container">
         <div class="shopping-add">
-          <input type="text" id="new_shopping_item" placeholder="Add item (e.g. 2L Milk, 500g Chicken, Apples)..." @keydown="${(e) => e.key === 'Enter' && this._addShoppingItem(e.target.value)}">
+          <input 
+            type="text" 
+            id="new_shopping_item" 
+            placeholder="Add item (e.g. 2L Milk, 500g Chicken, Apples)..." 
+            @keydown="${(e) => {
+              if (e.key === 'Enter') {
+                this._addShoppingItem(e.target.value);
+                e.target.value = '';
+              }
+            }}"
+          />
           <button class="btn-primary" @click="${() => {
             const input = this.shadowRoot.getElementById('new_shopping_item');
-            this._addShoppingItem(input.value);
-            input.value = '';
+            if (input && input.value) {
+              this._addShoppingItem(input.value);
+              input.value = '';
+            }
           }}">Add</button>
-          <button class="btn-primary" style="background: var(--nl-surface); color: var(--nl-fg); border: 1px solid var(--nl-border); padding: 14px; width: auto;" @click="${() => this._refreshShoppingList()}" title="Refresh List">
-            <ha-icon icon="mdi:refresh"></ha-icon>
+          
+          <button 
+            class="btn-primary" 
+            style="background: var(--nl-surface); color: var(--nl-fg); border: 1px solid var(--nl-border); padding: 14px; width: auto;" 
+            @click="${() => {
+              this._refreshShoppingList();
+              if (this.config.website_url) this._syncShoppingListFromWebsite(true);
+            }}" 
+            title="Sync & Refresh List">
+            <ha-icon icon="mdi:refresh" class="${this._directShoppingLoading ? 'spin-icon' : ''}"></ha-icon>
           </button>
         </div>
 
         ${hasCheckedItems ? html`
-          <div style="display: flex; justify-content: flex-end;">
+          <div style="display: flex; justify-content: flex-end; margin-bottom: 8px;">
             <button class="clear-checked-btn" @click="${() => this._clearCompletedShoppingItems(items.filter(i => i.checked))}">
               <ha-icon icon="mdi:check-all" style="--mdc-icon-size: 16px; margin-right: 4px;"></ha-icon> Clear Completed
             </button>
@@ -1892,13 +2153,52 @@ class NightlightDashboard extends LitElement {
 
   async _refreshShoppingList() {
     const shoppingSensorId = this.config.shopping_sensor || 'sensor.meal_planner_shopping_list';
-    await this.hass.callService('homeassistant', 'update_entity', { entity_id: shoppingSensorId });
+    if (this.hass) {
+      await this.hass.callService('homeassistant', 'update_entity', { entity_id: shoppingSensorId });
+    }
+    await this._fetchShoppingTodoItems();
   }
 
   async _clearCompletedShoppingItems(completedItems) {
+    const shoppingSensorId = this.config.shopping_sensor || 'sensor.meal_planner_shopping_list';
+    const todoEntity = this.config.shopping_todo_list || 'todo.shopping_list';
+
     for (const item of completedItems) {
-      await this.hass.callService('rest_command', 'meal_planner_delete_shopping_item', { id: item.id });
+      // 1. Delete from REST sensor
+      if (this.hass) {
+        await this.hass.callService('rest_command', 'meal_planner_delete_shopping_item', { id: item.id });
+      }
+
+      // 2. Remove / complete from todo.shopping_list
+      if (this.hass && this.hass.states[todoEntity]) {
+        try {
+          await this.hass.callService('todo', 'remove_item', {
+            entity_id: todoEntity,
+            item: item.rawName || item.name
+          });
+        } catch (e) {
+          // Fallback ignore if remove_item not supported
+        }
+      }
+
+      // 3. Delete from website API if configured
+      if (this.config.website_url) {
+        try {
+          const cleanBase = this.config.website_url.replace(/\/$/, '');
+          await fetch(`${cleanBase}/api/shopping-list?id=${encodeURIComponent(item.id)}`, {
+            method: 'DELETE'
+          });
+        } catch (e) {
+          // ignore
+        }
+      }
     }
+
+    // Clean up local lists
+    this._directShopping = (this._directShopping || []).filter(i => !completedItems.some(c => c.id === i.id));
+    this._cachedShoppingDocs = (this._cachedShoppingDocs || []).filter(i => !completedItems.some(c => (i.id === c.id || (i.name && i.name.includes(c.id)))));
+    this.requestUpdate();
+
     setTimeout(() => {
       this._refreshShoppingList();
     }, 500);
@@ -1933,7 +2233,6 @@ class NightlightDashboard extends LitElement {
         parsedName = mixedFractionMatch[5];
       } else {
         unit = "";
-        // If there's no unit, mixedFractionMatch[4] might be undefined, so we need to handle it carefully
         parsedName = (mixedFractionMatch[4] ? mixedFractionMatch[4] + " " : "") + (mixedFractionMatch[5] || "");
       }
     } else if (fractionMatch) {
@@ -1947,10 +2246,8 @@ class NightlightDashboard extends LitElement {
         parsedName = (fractionMatch[3] ? fractionMatch[3] + " " : "") + (fractionMatch[4] || "");
       }
     } else {
-      // Match decimals or integers with optional units attached (like 300g) or separated (like 3 tbsp)
-      // Also handles "Carrot - 1" by looking for numbers at the end if the start doesn't match
       const match = raw.match(/^([\d.]+)\s*([a-zA-Z]+)?\s*(.*)$/);
-      const reverseMatch = raw.match(/^(.*?)\s*-\s*([\d.]+)$/); // Matches "Carrot - 1" or "Carrot - 1.5"
+      const reverseMatch = raw.match(/^(.*?)\s*-\s*([\d.]+)$/);
 
       if (reverseMatch) {
         amount = parseFloat(reverseMatch[2]);
@@ -1964,14 +2261,11 @@ class NightlightDashboard extends LitElement {
           parsedName = match[3] || "";
         } else {
           unit = "";
-          // Crucial fix: if potentialUnit is NOT a known unit, it's part of the name.
-          // We must ensure we don't concatenate undefined objects.
           const part1 = match[2] ? match[2] + " " : "";
           const part2 = match[3] || "";
           parsedName = part1 + part2;
         }
       } else {
-        // Handle "Pinch of ..."
         const pinchMatch = raw.match(/^pinch of\s+(.*)$/i);
         if (pinchMatch) {
           amount = 1;
@@ -1989,51 +2283,161 @@ class NightlightDashboard extends LitElement {
       }
     }
 
-    // Final cleanup of the parsed name
     parsedName = parsedName.trim();
     if (!parsedName) {
-        parsedName = raw; // Fallback if parsing completely stripped the name
+      parsedName = raw;
     }
 
-    const id = 'item-' + Date.now();
+    category = this._inferCategory(parsedName);
+
+    // HA manual item identifier code [HA]
+    const storedNameWithCode = `[HA] ${parsedName}`;
+    const id = 'item-ha-' + Date.now();
     const shoppingSensorId = this.config.shopping_sensor || 'sensor.meal_planner_shopping_list';
-    await this.hass.callService('rest_command', 'meal_planner_upsert_shopping_item', {
+    const todoEntity = this.config.shopping_todo_list || 'todo.shopping_list';
+
+    // 1. Add to todo.shopping_list in Home Assistant
+    if (this.hass) {
+      try {
+        await this.hass.callService('todo', 'add_item', {
+          entity_id: todoEntity,
+          item: storedNameWithCode,
+          description: `Category: ${category}`
+        });
+      } catch (err) {
+        console.warn("Could not add to todo.shopping_list:", err);
+      }
+    }
+
+    // 2. Add via REST command to meal planner shopping sensor
+    if (this.hass) {
+      await this.hass.callService('rest_command', 'meal_planner_upsert_shopping_item', {
+        id: id,
+        name: storedNameWithCode,
+        department: category,
+        category: category,
+        amount: amount,
+        unit: unit,
+        checked: false
+      });
+    }
+
+    // 3. Post to website API if configured
+    if (this.config.website_url) {
+      try {
+        const cleanBase = this.config.website_url.replace(/\/$/, '');
+        await fetch(`${cleanBase}/api/shopping-list`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: id,
+            name: storedNameWithCode,
+            category: category,
+            amount: amount,
+            unit: unit,
+            checked: false,
+            createdAt: new Date().toISOString(),
+            isManual: true
+          })
+        });
+      } catch (e) {
+        console.warn("Direct website shopping sync failed:", e);
+      }
+    }
+
+    // 4. Optimistically add to _directShopping so it is immediately visible
+    const newShoppingItem = {
       id: id,
-      name: parsedName.trim(),
+      rawName: storedNameWithCode,
+      name: parsedName,
       department: category,
       category: category,
       amount: amount,
       unit: unit,
-      checked: false
-    });
+      checked: false,
+      isManual: true,
+      createdAt: new Date().toISOString()
+    };
+    this._directShopping = [newShoppingItem, ...(this._directShopping || [])];
+    this.requestUpdate();
+
     setTimeout(() => {
-      this.hass.callService('homeassistant', 'update_entity', { entity_id: shoppingSensorId });
+      this._refreshShoppingList();
     }, 1000);
   }
 
   async _toggleShoppingItem(item) {
     const shoppingSensorId = this.config.shopping_sensor || 'sensor.meal_planner_shopping_list';
+    const todoEntity = this.config.shopping_todo_list || 'todo.shopping_list';
+    const newChecked = !item.checked;
+
     // Optimistic UI Update - feels instant!
-    this._optimisticShoppingUpdates.set(item.id, !item.checked);
+    this._optimisticShoppingUpdates.set(item.id, newChecked);
     this.requestUpdate();
 
     try {
-      // Use the upsert command since we have all the data and we know it handles booleans correctly
-      await this.hass.callService('rest_command', 'meal_planner_upsert_shopping_item', {
-        id: item.id,
-        name: item.rawName,
-        department: item.department,
-        category: item.department,
-        amount: item.amount,
-        unit: item.unit,
-        checked: !item.checked
-      });
+      // 1. Update REST command
+      if (this.hass) {
+        await this.hass.callService('rest_command', 'meal_planner_upsert_shopping_item', {
+          id: item.id,
+          name: item.rawName || (item.isManual ? `[HA] ${item.name}` : item.name),
+          department: item.department,
+          category: item.department,
+          amount: item.amount,
+          unit: item.unit,
+          checked: newChecked
+        });
+      }
+
+      // 2. Update Home Assistant todo.shopping_list if entity exists
+      if (this.hass && this.hass.states[todoEntity]) {
+        try {
+          await this.hass.callService('todo', 'update_item', {
+            entity_id: todoEntity,
+            item: item.rawName || item.name,
+            status: newChecked ? 'completed' : 'needs_action'
+          });
+        } catch (e) {
+          // If uid needed
+          try {
+            await this.hass.callService('todo', 'update_item', {
+              entity_id: todoEntity,
+              item: item.id,
+              status: newChecked ? 'completed' : 'needs_action'
+            });
+          } catch (err) {
+            // ignore
+          }
+        }
+      }
+
+      // 3. Update Website API if configured
+      if (this.config.website_url) {
+        try {
+          const cleanBase = this.config.website_url.replace(/\/$/, '');
+          await fetch(`${cleanBase}/api/shopping-list`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: item.id,
+              name: item.rawName || item.name,
+              category: item.department,
+              amount: item.amount,
+              unit: item.unit,
+              checked: newChecked,
+              isManual: item.isManual
+            })
+          });
+        } catch (e) {
+          // ignore
+        }
+      }
       
       setTimeout(() => {
         this._refreshShoppingList();
       }, 1000);
 
-      // Clear optimistic state after a few seconds to rely on real data again
+      // Clear optimistic state after 4 seconds
       setTimeout(() => {
         this._optimisticShoppingUpdates.delete(item.id);
         this.requestUpdate();
@@ -2041,7 +2445,6 @@ class NightlightDashboard extends LitElement {
 
     } catch (e) {
       console.error("Failed to toggle shopping item:", e);
-      // Revert optimistic update on failure
       this._optimisticShoppingUpdates.delete(item.id);
       this.requestUpdate();
     }
@@ -2049,11 +2452,43 @@ class NightlightDashboard extends LitElement {
 
   async _deleteShoppingItem(id) {
     const shoppingSensorId = this.config.shopping_sensor || 'sensor.meal_planner_shopping_list';
-    await this.hass.callService('rest_command', 'meal_planner_delete_shopping_item', {
-      id: id
-    });
+    const todoEntity = this.config.shopping_todo_list || 'todo.shopping_list';
+
+    // Optimistically remove from state
+    this._directShopping = (this._directShopping || []).filter(i => i.id !== id);
+    this._cachedShoppingDocs = (this._cachedShoppingDocs || []).filter(i => i.id !== id);
+    this.requestUpdate();
+
+    if (this.hass) {
+      await this.hass.callService('rest_command', 'meal_planner_delete_shopping_item', {
+        id: id
+      });
+
+      if (this.hass.states[todoEntity]) {
+        try {
+          await this.hass.callService('todo', 'remove_item', {
+            entity_id: todoEntity,
+            item: id
+          });
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
+
+    if (this.config.website_url) {
+      try {
+        const cleanBase = this.config.website_url.replace(/\/$/, '');
+        await fetch(`${cleanBase}/api/shopping-list?id=${encodeURIComponent(id)}`, {
+          method: 'DELETE'
+        });
+      } catch (e) {
+        // ignore
+      }
+    }
+
     setTimeout(() => {
-      this.hass.callService('homeassistant', 'update_entity', { entity_id: shoppingSensorId });
+      this._refreshShoppingList();
     }, 1000);
   }
 
@@ -2951,6 +3386,15 @@ class NightlightCardEditor extends LitElement {
                 <ha-textfield label="Meals Sensor" .value="${cfg.meals_sensor || 'sensor.meal_planner_weekly_meals'}" .configValue="${'meals_sensor'}" @input="${this._valueChanged}" @value-changed="${this._valueChanged}"></ha-textfield>
                 <ha-textfield label="Recipes Sensor" .value="${cfg.recipes_sensor || 'sensor.meal_planner_recipes'}" .configValue="${'recipes_sensor'}" @input="${this._valueChanged}" @value-changed="${this._valueChanged}"></ha-textfield>
                 <ha-textfield label="Shopping Sensor" .value="${cfg.shopping_sensor || 'sensor.meal_planner_shopping_list'}" .configValue="${'shopping_sensor'}" @input="${this._valueChanged}" @value-changed="${this._valueChanged}"></ha-textfield>
+
+                <ha-entity-picker 
+                    .hass="${this.hass}" 
+                    label="Shopping To-Do List" 
+                    .value="${cfg.shopping_todo_list || 'todo.shopping_list'}" 
+                    .configValue="${'shopping_todo_list'}" 
+                    .includeDomains="${['todo']}" 
+                    @value-changed="${(e) => this._updateConfig({shopping_todo_list: e.detail.value})}">
+                </ha-entity-picker>
 
                 <ha-entity-picker 
                     .hass="${this.hass}" 
