@@ -78,21 +78,28 @@ class NightlightDashboard extends LitElement {
   }
 
   setConfig(config) {
-    if (!config.entities && !config.chores) {
-      throw new Error("Define entities or chores in YAML.");
+    if (!config) {
+      throw new Error("Invalid configuration");
     }
     this.config = {
       title: "Family Hub",
       theme: "light",
       logo_url: '/',
+      entities: [],
+      periods: [
+        { name: "Morning", start: "06:00", end: "09:00" },
+        { name: "Afternoon", start: "09:01", end: "17:00" },
+        { name: "Evening", start: "17:01", end: "21:00" }
+      ],
+      chores: [],
       ...config
     };
     // Initialize active calendars if not set
-    if (this._activeCalendars.length === 0 && config.entities) {
-      this._activeCalendars = config.entities.map(e => e.entity);
+    if (this._activeCalendars.length === 0 && this.config.entities && Array.isArray(this.config.entities)) {
+      this._activeCalendars = this.config.entities.map(e => (typeof e === 'string' ? e : e?.entity)).filter(Boolean);
     }
-    if (config.theme) {
-      this._themeMode = config.theme;
+    if (this.config.theme) {
+      this._themeMode = this.config.theme;
     }
   }
 
@@ -2311,24 +2318,29 @@ class NightlightCardEditor extends LitElement {
   static get properties() { return { hass: {}, _config: {} }; }
 
   setConfig(config) {
-    this._config = config;
+    this._config = config || {};
     this.requestUpdate();
   }
 
   _updateConfig(changes) {
+    this._config = { ...(this._config || {}), ...changes };
     this.dispatchEvent(new CustomEvent("config-changed", { 
-      detail: { config: { ...this._config, ...changes } },
+      detail: { config: this._config },
       bubbles: true, 
       composed: true 
     }));
+    this.requestUpdate();
   }
 
   _valueChanged(ev) {
-    if (!this._config || !this.hass) return;
+    if (!this._config) return;
     const target = ev.target;
-    const field = target.configValue; 
-    const value = target.value;
-    if (field) this._updateConfig({ [field]: value });
+    const field = target.configValue || target.getAttribute('configValue');
+    const value = ev.detail?.value !== undefined ? ev.detail.value : target.value;
+    if (field) {
+      if (this._config[field] === value) return;
+      this._updateConfig({ [field]: value });
+    }
   }
 
   static get styles() {
@@ -2344,19 +2356,20 @@ class NightlightCardEditor extends LitElement {
 
   render() {
     if (!this.hass || !this._config) return html``;
+    const cfg = this._config;
     return html`
       <div class="editor-container">
         <div class="editor-section">
             <h3>General Settings</h3>
             <div class="form-grid">
-                <ha-textfield label="Dashboard Title" .value="${this._config.title}" .configValue="${'title'}" @input="${this._valueChanged}"></ha-textfield>
-                <ha-textfield label="Logo URL" .value="${this._config.logo_url}" .configValue="${'logo_url'}" @input="${this._valueChanged}"></ha-textfield>
+                <ha-textfield label="Dashboard Title" .value="${cfg.title || ''}" .configValue="${'title'}" @input="${this._valueChanged}" @value-changed="${this._valueChanged}"></ha-textfield>
+                <ha-textfield label="Logo URL" .value="${cfg.logo_url || ''}" .configValue="${'logo_url'}" @input="${this._valueChanged}" @value-changed="${this._valueChanged}"></ha-textfield>
                 
                 <div style="display: flex; flex-direction: column; gap: 8px;">
-                   <label>Theme</label>
-                   <select .value="${this._config.theme || 'light'}" @change="${(e) => this._updateConfig({theme: e.target.value})}" style="padding: 10px; border-radius: 4px; border: 1px solid var(--divider-color);">
-                     <option value="light">Light Mode</option>
-                     <option value="dark">Dark Mode</option>
+                   <label style="font-size: 0.85rem; color: var(--secondary-text-color);">Theme</label>
+                   <select .value="${cfg.theme || 'light'}" @change="${(e) => this._updateConfig({theme: e.target.value})}" style="padding: 10px; border-radius: 4px; border: 1px solid var(--divider-color); background: var(--card-background-color); color: var(--primary-text-color);">
+                     <option value="light" ?selected="${cfg.theme === 'light'}">Light Mode</option>
+                     <option value="dark" ?selected="${cfg.theme === 'dark'}">Dark Mode</option>
                    </select>
                 </div>
             </div>
@@ -2365,15 +2378,15 @@ class NightlightCardEditor extends LitElement {
         <div class="editor-section">
             <h3>Integrations & Services</h3>
             <div class="form-grid">
-                <ha-textfield label="Website URL (e.g. https://my-meals.app)" .value="${this._config.website_url || ''}" .configValue="${'website_url'}" @input="${this._valueChanged}"></ha-textfield>
-                <ha-textfield label="Meals Sensor" .value="${this._config.meals_sensor || 'sensor.meal_planner_weekly_meals'}" .configValue="${'meals_sensor'}" @input="${this._valueChanged}"></ha-textfield>
-                <ha-textfield label="Recipes Sensor" .value="${this._config.recipes_sensor || 'sensor.meal_planner_recipes'}" .configValue="${'recipes_sensor'}" @input="${this._valueChanged}"></ha-textfield>
-                <ha-textfield label="Shopping Sensor" .value="${this._config.shopping_sensor || 'sensor.meal_planner_shopping_list'}" .configValue="${'shopping_sensor'}" @input="${this._valueChanged}"></ha-textfield>
+                <ha-textfield label="Website URL (e.g. https://recipe-manager-797363602183.us-west1.run.app)" .value="${cfg.website_url || ''}" .configValue="${'website_url'}" @input="${this._valueChanged}" @value-changed="${this._valueChanged}"></ha-textfield>
+                <ha-textfield label="Meals Sensor" .value="${cfg.meals_sensor || 'sensor.meal_planner_weekly_meals'}" .configValue="${'meals_sensor'}" @input="${this._valueChanged}" @value-changed="${this._valueChanged}"></ha-textfield>
+                <ha-textfield label="Recipes Sensor" .value="${cfg.recipes_sensor || 'sensor.meal_planner_recipes'}" .configValue="${'recipes_sensor'}" @input="${this._valueChanged}" @value-changed="${this._valueChanged}"></ha-textfield>
+                <ha-textfield label="Shopping Sensor" .value="${cfg.shopping_sensor || 'sensor.meal_planner_shopping_list'}" .configValue="${'shopping_sensor'}" @input="${this._valueChanged}" @value-changed="${this._valueChanged}"></ha-textfield>
 
                 <ha-entity-picker 
                     .hass="${this.hass}" 
                     label="View Controller" 
-                    .value="${this._config.view_controller}" 
+                    .value="${cfg.view_controller || ''}" 
                     .configValue="${'view_controller'}" 
                     .includeDomains="${['input_select']}" 
                     @value-changed="${(e) => this._updateConfig({view_controller: e.detail.value})}">
@@ -2382,17 +2395,16 @@ class NightlightCardEditor extends LitElement {
                 <ha-entity-picker 
                     .hass="${this.hass}" 
                     label="Family Notes List" 
-                    .value="${this._config.notes_entity}" 
+                    .value="${cfg.notes_entity || ''}" 
                     .configValue="${'notes_entity'}" 
-                    .includeDomains="${['todo']}"
+                    .includeDomains="${['todo']}" 
                     @value-changed="${(e) => this._updateConfig({notes_entity: e.detail.value})}">
                 </ha-entity-picker>
             </div>
         </div>
 
         <div class="info-box">
-           <strong>Advanced Configuration:</strong> Entities, Chores, Meal Plans, and Custom Navigation must be configured via YAML code editor. 
-           See documentation for structure.
+           <strong>Advanced Configuration:</strong> Entities, Chores, Meal Plans, and Custom Navigation can be configured directly in the YAML code editor.
         </div>
       </div>
     `;
