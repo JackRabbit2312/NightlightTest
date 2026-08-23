@@ -122,6 +122,9 @@ class NightlightDashboard extends LitElement {
 
       if (this._activeView === 'whiteboard') this._fetchNotes(this.config.notes_entity);
       if (this._activeView === 'chores') this._fetchChoreData();
+      if (this._activeView === 'meals' && this.config.website_url && (!this._directRecipes || this._directRecipes.length === 0)) {
+        this._syncRecipesFromWebsite();
+      }
       
       // Force refresh events if switching to agenda to ensure we have 30 days
       if (this._activeView === 'calendar' && this._calendarMode === 'agenda') {
@@ -1002,8 +1005,26 @@ class NightlightDashboard extends LitElement {
     this.requestUpdate();
 
     const recipeSensorId = this.config.recipes_sensor || 'sensor.meal_planner_recipes';
+    const websiteUrl = this.config.website_url;
 
-    // Refresh the sensor via Home Assistant server-side (avoids browser CORS completely)
+    // 1. Direct browser fetch using CORS headers for instant updates
+    if (websiteUrl) {
+      try {
+        const apiUrl = `${websiteUrl.replace(/\/$/, '')}/api/recipes`;
+        const res = await fetch(apiUrl);
+        if (res.ok) {
+          const data = await res.json();
+          const items = Array.isArray(data) ? data : (Array.isArray(data.recipes) ? data.recipes : (Array.isArray(data.documents) ? data.documents : []));
+          if (items && items.length > 0) {
+            this._directRecipes = items.map(d => this._parseRecipeDoc(d)).filter(Boolean);
+          }
+        }
+      } catch (err) {
+        console.warn("Direct recipe API fetch:", err);
+      }
+    }
+
+    // 2. Refresh the sensor via Home Assistant server-side
     if (this.hass) {
       try {
         await this.hass.callService('homeassistant', 'update_entity', { entity_id: recipeSensorId });
@@ -1015,7 +1036,7 @@ class NightlightDashboard extends LitElement {
     setTimeout(() => {
       this._directRecipesLoading = false;
       this.requestUpdate();
-    }, 1200);
+    }, 600);
   }
 
   async _scheduleMeal(dateStr, recipeId) {
