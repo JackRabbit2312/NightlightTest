@@ -674,12 +674,14 @@ class NightlightDashboard extends LitElement {
 
   _parseMealDoc(doc) {
     if (!doc) return null;
+    const docId = doc.name ? doc.name.split('/').pop() : "";
+
     // Format 1: Firestore REST structure
     if (doc.fields) {
       const f = doc.fields;
-      const date = f.date?.stringValue || f.id?.stringValue || "";
+      const date = f.date?.stringValue || f.id?.stringValue || docId || "";
       const recipeId = f.recipeId?.stringValue || f.recipe_id?.stringValue || "";
-      let recipeTitle = f.recipe_title?.stringValue || "";
+      let recipeTitle = f.recipe_title?.stringValue || f.title?.stringValue || "";
       let macros = null;
       let url = f.url?.stringValue || "";
       
@@ -690,35 +692,35 @@ class NightlightDashboard extends LitElement {
         if (rf.macros && rf.macros.mapValue && rf.macros.mapValue.fields) {
           const mf = rf.macros.mapValue.fields;
           macros = {
-            cal: mf.calories?.integerValue || mf.calories?.doubleValue || 0,
-            pro: mf.protein?.integerValue || mf.protein?.doubleValue || 0,
-            carbs: mf.carbs?.integerValue || mf.carbs?.doubleValue || 0,
-            fat: mf.fat?.integerValue || mf.fat?.doubleValue || 0
+            cal: Number(mf.calories?.integerValue ?? mf.calories?.doubleValue ?? 0),
+            pro: Number(mf.protein?.integerValue ?? mf.protein?.doubleValue ?? 0),
+            carbs: Number(mf.carbs?.integerValue ?? mf.carbs?.doubleValue ?? 0),
+            fat: Number(mf.fat?.integerValue ?? mf.fat?.doubleValue ?? 0)
           };
         }
       }
       if (!macros && f.macros && f.macros.mapValue && f.macros.mapValue.fields) {
         const mf = f.macros.mapValue.fields;
         macros = {
-          cal: mf.calories?.integerValue || mf.calories?.doubleValue || 0,
-          pro: mf.protein?.integerValue || mf.protein?.doubleValue || 0,
-          carbs: mf.carbs?.integerValue || mf.carbs?.doubleValue || 0,
-          fat: mf.fat?.integerValue || mf.fat?.doubleValue || 0
+          cal: Number(mf.calories?.integerValue ?? mf.calories?.doubleValue ?? 0),
+          pro: Number(mf.protein?.integerValue ?? mf.protein?.doubleValue ?? 0),
+          carbs: Number(mf.carbs?.integerValue ?? mf.carbs?.doubleValue ?? 0),
+          fat: Number(mf.fat?.integerValue ?? mf.fat?.doubleValue ?? 0)
         };
       }
       if (!macros && (f.calories || f.protein || f.carbs || f.fat)) {
         macros = {
-          cal: f.calories?.integerValue || f.calories?.doubleValue || 0,
-          pro: f.protein?.integerValue || f.protein?.doubleValue || 0,
-          carbs: f.carbs?.integerValue || f.carbs?.doubleValue || 0,
-          fat: f.fat?.integerValue || f.fat?.doubleValue || 0
+          cal: Number(f.calories?.integerValue ?? f.calories?.doubleValue ?? 0),
+          pro: Number(f.protein?.integerValue ?? f.protein?.doubleValue ?? 0),
+          carbs: Number(f.carbs?.integerValue ?? f.carbs?.doubleValue ?? 0),
+          fat: Number(f.fat?.integerValue ?? f.fat?.doubleValue ?? 0)
         };
       }
       return { id: date, date, recipeId, recipeTitle, macros, url };
     }
 
     // Format 2: Clean Standard REST JSON
-    const date = doc.date || doc.id || "";
+    const date = doc.date || doc.id || docId || "";
     const recipeId = doc.recipeId || doc.recipe_id || "";
     let recipeTitle = doc.recipeTitle || doc.recipe_title || doc.title || (doc.recipe && doc.recipe.title) || "";
     let url = doc.url || doc.link || doc.sourceUrl || (doc.recipe && (doc.recipe.url || doc.recipe.link)) || "";
@@ -743,33 +745,58 @@ class NightlightDashboard extends LitElement {
 
   _parseRecipeDoc(doc) {
     if (!doc) return null;
+    const docId = doc.name ? doc.name.split('/').pop() : "";
+
     if (doc.fields) {
       const f = doc.fields;
-      const id = f.id?.stringValue || "";
+      const id = f.id?.stringValue || docId || "";
       const title = f.title?.stringValue || f.name?.stringValue || "Unknown Recipe";
       const url = f.url?.stringValue || f.sourceUrl?.stringValue || f.link?.stringValue || "";
-      const prepTime = f.prepTime?.integerValue || f.prep_time?.integerValue || 0;
-      const cookTime = f.cookTime?.integerValue || f.cook_time?.integerValue || 0;
-      const servings = f.servings?.integerValue || 2;
+      const prepTime = Number(f.prepTime?.integerValue ?? f.prepTime?.doubleValue ?? f.prep_time?.integerValue ?? f.prep_time?.doubleValue ?? 0);
+      const cookTime = Number(f.cookTime?.integerValue ?? f.cookTime?.doubleValue ?? f.cook_time?.integerValue ?? f.cook_time?.doubleValue ?? 0);
+      const servings = Number(f.servings?.integerValue ?? f.servings?.doubleValue ?? 2);
+      const category = f.category?.stringValue || f.type?.stringValue || f.department?.stringValue || "";
+      
+      let tags = [];
+      if (f.tags && f.tags.arrayValue && Array.isArray(f.tags.arrayValue.values)) {
+        tags = f.tags.arrayValue.values.map(v => v.stringValue || v.value).filter(Boolean);
+      } else if (f.tags && f.tags.stringValue) {
+        tags = f.tags.stringValue.split(',').map(s => s.trim()).filter(Boolean);
+      }
+
       let macros = null;
       if (f.macros && f.macros.mapValue && f.macros.mapValue.fields) {
         const mf = f.macros.mapValue.fields;
         macros = {
-          calories: mf.calories?.integerValue || 0,
-          protein: mf.protein?.integerValue || 0,
-          carbs: mf.carbs?.integerValue || 0,
-          fat: mf.fat?.integerValue || 0
+          calories: Number(mf.calories?.integerValue ?? mf.calories?.doubleValue ?? 0),
+          protein: Number(mf.protein?.integerValue ?? mf.protein?.doubleValue ?? 0),
+          carbs: Number(mf.carbs?.integerValue ?? mf.carbs?.doubleValue ?? 0),
+          fat: Number(mf.fat?.integerValue ?? mf.fat?.doubleValue ?? 0)
+        };
+      } else if (f.calories || f.protein) {
+        macros = {
+          calories: Number(f.calories?.integerValue ?? f.calories?.doubleValue ?? 0),
+          protein: Number(f.protein?.integerValue ?? f.protein?.doubleValue ?? 0),
+          carbs: Number(f.carbs?.integerValue ?? f.carbs?.doubleValue ?? 0),
+          fat: Number(f.fat?.integerValue ?? f.fat?.doubleValue ?? 0)
         };
       }
-      return { id, title, url, prepTime, cookTime, servings, macros };
+      return { id, title, url, prepTime, cookTime, servings, macros, category, tags };
     }
+
+    let tags = [];
+    if (Array.isArray(doc.tags)) tags = doc.tags;
+    else if (typeof doc.tags === 'string') tags = doc.tags.split(',').map(s => s.trim()).filter(Boolean);
+
     return {
-      id: doc.id || "",
+      id: doc.id || docId || "",
       title: doc.title || doc.name || "Unknown Recipe",
       url: doc.url || doc.link || doc.sourceUrl || "",
       prepTime: Number(doc.prepTime || doc.prep_time || 0),
       cookTime: Number(doc.cookTime || doc.cook_time || 0),
       servings: Number(doc.servings || 2),
+      category: doc.category || doc.type || "",
+      tags: tags,
       macros: doc.macros || {
         calories: Number(doc.calories || 0),
         protein: Number(doc.protein || 0),
@@ -1210,18 +1237,19 @@ class NightlightDashboard extends LitElement {
       let checked = false;
 
       // Firestore REST structure
+      const docId = doc.name ? doc.name.split('/').pop() : "";
       if (doc.fields) {
         const f = doc.fields;
-        id = f.id?.stringValue || "";
-        rawName = f.name?.stringValue || "Unknown";
+        id = f.id?.stringValue || docId || "";
+        rawName = f.name?.stringValue || f.title?.stringValue || "Unknown";
         preparation = f.preparation?.stringValue || "";
         category = f.category?.stringValue || f.department?.stringValue || "";
-        amount = f.metricAmount?.doubleValue ?? f.metricAmount?.integerValue ?? f.amount?.doubleValue ?? f.amount?.integerValue ?? 1;
+        amount = Number(f.metricAmount?.doubleValue ?? f.metricAmount?.integerValue ?? f.amount?.doubleValue ?? f.amount?.integerValue ?? 1);
         unit = f.metricUnit?.stringValue || f.unit?.stringValue || "";
         checked = f.checked?.booleanValue ?? (f.checked?.stringValue === 'true');
       } else {
         // Standard clean REST JSON
-        id = String(doc.id || "");
+        id = String(doc.id || docId || "");
         rawName = doc.name || doc.title || "Unknown";
         preparation = doc.preparation || "";
         category = doc.category || doc.department || "";
