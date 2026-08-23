@@ -1521,10 +1521,11 @@ class NightlightDashboard extends LitElement {
     await this.hass.callService('rest_command', 'meal_planner_upsert_shopping_item', {
       id: id,
       name: parsedName.trim(),
+      department: category,
       category: category,
       amount: amount,
       unit: unit,
-      checked: "false"
+      checked: false
     });
     setTimeout(() => {
       this.hass.callService('homeassistant', 'update_entity', { entity_id: shoppingSensorId });
@@ -1542,10 +1543,11 @@ class NightlightDashboard extends LitElement {
       await this.hass.callService('rest_command', 'meal_planner_upsert_shopping_item', {
         id: item.id,
         name: item.rawName,
+        department: item.department,
         category: item.department,
         amount: item.amount,
         unit: item.unit,
-        checked: !item.checked ? "true" : "false"
+        checked: !item.checked
       });
       
       setTimeout(() => {
@@ -2440,7 +2442,7 @@ class NightlightCardEditor extends LitElement {
         <div class="editor-section">
             <h3>Integrations & Services</h3>
             <div class="form-grid">
-                <ha-textfield label="Website URL (e.g. https://recipe-manager-797363602183.us-west1.run.app)" .value="${cfg.website_url || ''}" .configValue="${'website_url'}" @input="${this._valueChanged}" @value-changed="${this._valueChanged}"></ha-textfield>
+                <ha-textfield label="Website URL (e.g. https://recipe-manager-1.ai.studio)" .value="${cfg.website_url || ''}" .configValue="${'website_url'}" @input="${this._valueChanged}" @value-changed="${this._valueChanged}"></ha-textfield>
                 <ha-textfield label="Meals Sensor" .value="${cfg.meals_sensor || 'sensor.meal_planner_weekly_meals'}" .configValue="${'meals_sensor'}" @input="${this._valueChanged}" @value-changed="${this._valueChanged}"></ha-textfield>
                 <ha-textfield label="Recipes Sensor" .value="${cfg.recipes_sensor || 'sensor.meal_planner_recipes'}" .configValue="${'recipes_sensor'}" @input="${this._valueChanged}" @value-changed="${this._valueChanged}"></ha-textfield>
                 <ha-textfield label="Shopping Sensor" .value="${cfg.shopping_sensor || 'sensor.meal_planner_shopping_list'}" .configValue="${'shopping_sensor'}" @input="${this._valueChanged}" @value-changed="${this._valueChanged}"></ha-textfield>
