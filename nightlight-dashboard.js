@@ -836,11 +836,11 @@ class NightlightDashboard extends LitElement {
           ${this._directRecipesLoading ? html`<span class="syncing-indicator"><ha-icon icon="mdi:loading" class="spin-icon"></ha-icon> Syncing recipes...</span>` : ''}
         </div>
         <div class="meals-actions">
+          <button class="btn-meals-action" @click="${() => this._syncRecipesFromWebsite()}" title="Trigger Home Assistant to refresh the recipe sensor and catalog">
+            <ha-icon icon="mdi:cloud-sync-outline" style="--mdc-icon-size: 18px;"></ha-icon>
+            <span>Refresh Catalog</span>
+          </button>
           ${websiteUrl ? html`
-            <button class="btn-meals-action" @click="${() => this._syncRecipesFromWebsite()}" title="Sync and fetch all recipes directly from website API">
-              <ha-icon icon="mdi:cloud-sync-outline" style="--mdc-icon-size: 18px;"></ha-icon>
-              <span>Sync All from Website</span>
-            </button>
             <a href="${websiteUrl}" target="_blank" rel="noopener noreferrer" class="btn-meals-action link" title="Open Recipe Website">
               <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size: 18px;"></ha-icon>
               <span>Open Website</span>
@@ -933,10 +933,6 @@ class NightlightDashboard extends LitElement {
     this._recipePickerDate = dateStr;
     this._recipeSearchQuery = '';
     this._recipeCategoryFilter = 'ALL';
-    // Auto-sync in background if website_url is configured and no direct recipes loaded
-    if (this.config.website_url && (!this._directRecipes || this._directRecipes.length === 0)) {
-      this._syncRecipesFromWebsite();
-    }
     this.requestUpdate();
   }
 
@@ -953,7 +949,7 @@ class NightlightDashboard extends LitElement {
 
     const recipeSensorId = this.config.recipes_sensor || 'sensor.meal_planner_recipes';
 
-    // 1. Always trigger Home Assistant backend to refresh the recipes sensor (bypasses browser CORS entirely)
+    // Refresh the sensor via Home Assistant server-side (avoids browser CORS completely)
     if (this.hass) {
       try {
         await this.hass.callService('homeassistant', 'update_entity', { entity_id: recipeSensorId });
@@ -962,38 +958,10 @@ class NightlightDashboard extends LitElement {
       }
     }
 
-    // 2. Also attempt direct client-side fetch if website_url is configured and CORS is allowed
-    if (this.config.website_url) {
-      try {
-        const baseUrl = this.config.website_url.replace(/\/$/, '');
-        const endpoint = `${baseUrl}/api/recipes`;
-        const response = await fetch(endpoint, {
-          method: 'GET',
-          headers: { 'Accept': 'application/json' }
-        });
-        if (response.ok) {
-          const data = await response.json();
-          let list = [];
-          if (Array.isArray(data.recipes)) list = data.recipes;
-          else if (Array.isArray(data.items)) list = data.items;
-          else if (Array.isArray(data.documents)) list = data.documents;
-          else if (Array.isArray(data)) list = data;
-
-          const parsed = list.map(d => this._parseRecipeDoc(d)).filter(Boolean);
-          if (parsed.length > 0) {
-            this._directRecipes = parsed;
-          }
-        }
-      } catch (e) {
-        // Expected when CORS is not configured on the website backend; Home Assistant sensor handles it.
-        console.info("Direct browser fetch fallback (relying on Home Assistant sensor):", e.message || e);
-      }
-    }
-
     setTimeout(() => {
       this._directRecipesLoading = false;
       this.requestUpdate();
-    }, 1000);
+    }, 1200);
   }
 
   async _scheduleMeal(dateStr, recipeId) {
@@ -1124,12 +1092,10 @@ class NightlightDashboard extends LitElement {
                 ` : ''}
               </div>
 
-              ${this.config.website_url ? html`
-                <button class="btn-sync-inline" @click="${() => this._syncRecipesFromWebsite()}" title="Re-fetch recipes from website">
-                  <ha-icon icon="mdi:refresh" class="${this._directRecipesLoading ? 'spin-icon' : ''}" style="--mdc-icon-size: 18px;"></ha-icon>
-                  <span>Sync</span>
-                </button>
-              ` : ''}
+              <button class="btn-sync-inline" @click="${() => this._syncRecipesFromWebsite()}" title="Refresh recipe catalog from Home Assistant">
+                <ha-icon icon="mdi:refresh" class="${this._directRecipesLoading ? 'spin-icon' : ''}" style="--mdc-icon-size: 18px;"></ha-icon>
+                <span>Refresh</span>
+              </button>
             </div>
 
             <!-- Categories / Tags Filter -->
