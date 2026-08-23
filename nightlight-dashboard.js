@@ -26,7 +26,12 @@ class NightlightDashboard extends LitElement {
       _menuOpen: { type: Boolean },
       _todoItems: { type: Array },
       _weatherEntity: { type: String },
-      _themeMode: { type: String }
+      _themeMode: { type: String },
+      _recipeSearchQuery: { type: String },
+      _recipeCategoryFilter: { type: String },
+      _recipePickerDate: { type: String },
+      _directRecipes: { type: Array },
+      _directRecipesLoading: { type: Boolean }
     };
   }
 
@@ -65,6 +70,11 @@ class NightlightDashboard extends LitElement {
     this._cachedShoppingDocs = [];
     this._cachedMealDocs = [];
     this._cachedRecipeDocs = [];
+    this._recipeSearchQuery = '';
+    this._recipeCategoryFilter = 'ALL';
+    this._recipePickerDate = null;
+    this._directRecipes = [];
+    this._directRecipesLoading = false;
   }
 
   setConfig(config) {
@@ -578,6 +588,7 @@ class NightlightDashboard extends LitElement {
 
         ${this._selectedEvent ? this._renderModal() : ''}
         ${this._showAddModal ? this._renderAddModal() : ''}
+        ${this._recipePickerDate ? this._renderRecipePickerModal() : ''}
       </div>
     `;
   }
@@ -780,7 +791,17 @@ class NightlightDashboard extends LitElement {
     const rawRecipes = this._extractRawList(recipesSensor);
     if (rawRecipes.length > 0) this._cachedRecipeDocs = rawRecipes;
 
-    const recipes = (this._cachedRecipeDocs || []).map(d => this._parseRecipeDoc(d)).filter(Boolean).sort((a, b) => a.title.localeCompare(b.title));
+    // Merge sensor recipes with directly synced/fetched browser recipes
+    const combinedMap = new Map();
+    (this._cachedRecipeDocs || []).forEach(d => {
+      const parsed = this._parseRecipeDoc(d);
+      if (parsed && parsed.id) combinedMap.set(parsed.id, parsed);
+    });
+    (this._directRecipes || []).forEach(r => {
+      if (r && r.id) combinedMap.set(r.id, r);
+    });
+
+    const recipes = Array.from(combinedMap.values()).sort((a, b) => a.title.localeCompare(b.title));
 
     // Generate current week (Monday to Sunday)
     const today = new Date();
@@ -796,7 +817,31 @@ class NightlightDashboard extends LitElement {
       weekDays.push(d);
     }
 
+    const websiteUrl = this.config.website_url;
+
     return html`
+      <div class="meals-header-bar">
+        <div class="meals-sync-info">
+          <span class="recipe-count-badge">
+            <ha-icon icon="mdi:book-open-page-variant-outline" style="--mdc-icon-size: 16px;"></ha-icon>
+            ${recipes.length} Website Recipes Available
+          </span>
+          ${this._directRecipesLoading ? html`<span class="syncing-indicator"><ha-icon icon="mdi:loading" class="spin-icon"></ha-icon> Syncing recipes...</span>` : ''}
+        </div>
+        <div class="meals-actions">
+          ${websiteUrl ? html`
+            <button class="btn-meals-action" @click="${() => this._syncRecipesFromWebsite()}" title="Sync and fetch all recipes directly from website API">
+              <ha-icon icon="mdi:cloud-sync-outline" style="--mdc-icon-size: 18px;"></ha-icon>
+              <span>Sync All from Website</span>
+            </button>
+            <a href="${websiteUrl}" target="_blank" rel="noopener noreferrer" class="btn-meals-action link" title="Open Recipe Website">
+              <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size: 18px;"></ha-icon>
+              <span>Open Website</span>
+            </a>
+          ` : ''}
+        </div>
+      </div>
+
       <div class="meals-container">
         ${weekDays.map(d => {
           const dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -834,20 +879,33 @@ class NightlightDashboard extends LitElement {
               </div>
               
               <div class="meal-content">
-                <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
-                  <select class="meal-select" @change="${(e) => this._scheduleMeal(dateStr, e.target.value)}">
-                    <option value="">No meal planned</option>
-                    <option value="custom">✏️ Custom Meal...</option>
-                    ${isCustom ? html`<option value="${meal.recipeId}" selected>🍽️ ${recipeTitle || 'Custom Meal'}</option>` : ''}
-                    ${recipes.map(r => html`
-                      <option value="${r.id}" ?selected="${meal && meal.recipeId === r.id}">${r.title}</option>
-                    `)}
-                  </select>
-                  ${recipeUrl ? html`
-                    <a href="${recipeUrl}" target="_blank" rel="noopener noreferrer" title="View Recipe on Website" style="color: var(--nl-accent); opacity: 0.85; transition: opacity 0.2s; display: flex; align-items: center; justify-content: center; text-decoration: none;">
-                      <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size: 22px;"></ha-icon>
-                    </a>
-                  ` : ''}
+                <div class="meal-picker-box">
+                  <div class="meal-current-display">
+                    ${meal && meal.recipeId ? html`
+                      <div class="meal-title-row">
+                        <span class="meal-active-title" title="${recipeTitle}">${isCustom ? '🍽️ ' : '📖 '}<strong>${recipeTitle}</strong></span>
+                        ${recipeUrl ? html`
+                          <a href="${recipeUrl}" target="_blank" rel="noopener noreferrer" title="View Recipe on Website" class="meal-link-btn">
+                            <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size: 20px;"></ha-icon>
+                          </a>
+                        ` : ''}
+                      </div>
+                    ` : html`
+                      <span class="meal-empty-title">No meal planned</span>
+                    `}
+                  </div>
+
+                  <div class="meal-button-row">
+                    <button class="btn-meal-search" @click="${() => this._openRecipePicker(dateStr)}" title="Search & Pick from All Recipes">
+                      <ha-icon icon="mdi:magnify" style="--mdc-icon-size: 18px;"></ha-icon>
+                      <span>${meal && meal.recipeId ? 'Change Meal...' : 'Search All Recipes...'}</span>
+                    </button>
+                    ${meal && meal.recipeId ? html`
+                      <button class="btn-meal-clear" @click="${() => this._scheduleMeal(dateStr, '')}" title="Clear planned meal">
+                        <ha-icon icon="mdi:close" style="--mdc-icon-size: 16px;"></ha-icon>
+                      </button>
+                    ` : ''}
+                  </div>
                 </div>
                 
                 ${macros ? html`
@@ -864,6 +922,53 @@ class NightlightDashboard extends LitElement {
       </div>`;
   }
 
+  _openRecipePicker(dateStr) {
+    this._recipePickerDate = dateStr;
+    this._recipeSearchQuery = '';
+    this._recipeCategoryFilter = 'ALL';
+    // Auto-sync in background if website_url is configured and no direct recipes loaded
+    if (this.config.website_url && (!this._directRecipes || this._directRecipes.length === 0)) {
+      this._syncRecipesFromWebsite();
+    }
+    this.requestUpdate();
+  }
+
+  _closeRecipePicker() {
+    this._recipePickerDate = null;
+    this._recipeSearchQuery = '';
+    this.requestUpdate();
+  }
+
+  async _syncRecipesFromWebsite() {
+    if (!this.config.website_url || this._directRecipesLoading) return;
+    this._directRecipesLoading = true;
+    this.requestUpdate();
+
+    try {
+      const baseUrl = this.config.website_url.replace(/\/$/, '');
+      const endpoint = `${baseUrl}/api/recipes`;
+      const response = await fetch(endpoint, {
+        headers: { 'Accept': 'application/json' }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        let list = [];
+        if (Array.isArray(data.recipes)) list = data.recipes;
+        else if (Array.isArray(data.items)) list = data.items;
+        else if (Array.isArray(data.documents)) list = data.documents;
+        else if (Array.isArray(data)) list = data;
+
+        const parsed = list.map(d => this._parseRecipeDoc(d)).filter(Boolean);
+        this._directRecipes = parsed;
+      }
+    } catch (e) {
+      console.warn("Direct website recipe fetch attempted:", e);
+    } finally {
+      this._directRecipesLoading = false;
+      this.requestUpdate();
+    }
+  }
+
   async _scheduleMeal(dateStr, recipeId) {
     const mealSensorId = this.config.meals_sensor || 'sensor.meal_planner_weekly_meals';
     const recipeSensorId = this.config.recipes_sensor || 'sensor.meal_planner_recipes';
@@ -871,7 +976,7 @@ class NightlightDashboard extends LitElement {
     if (recipeId === 'custom') {
       const customName = prompt("Enter custom meal name:");
       if (!customName || !customName.trim()) {
-        this.requestUpdate(); // Reset dropdown
+        this.requestUpdate();
         return;
       }
       const customId = 'custom_' + Date.now();
@@ -893,8 +998,11 @@ class NightlightDashboard extends LitElement {
     } else {
       const recipesSensor = this.hass.states[recipeSensorId];
       const rawRecipes = this._extractRawList(recipesSensor);
-      const recipes = rawRecipes.map(d => this._parseRecipeDoc(d)).filter(Boolean);
-      const recipe = recipes.find(r => r.id === recipeId);
+      const combinedMap = new Map();
+      rawRecipes.map(d => this._parseRecipeDoc(d)).filter(Boolean).forEach(r => combinedMap.set(r.id, r));
+      (this._directRecipes || []).forEach(r => combinedMap.set(r.id, r));
+      
+      const recipe = combinedMap.get(recipeId);
       
       if (recipe) {
         await this.hass.callService('rest_command', 'meal_planner_upsert_weekly_meal', {
@@ -916,6 +1024,167 @@ class NightlightDashboard extends LitElement {
     setTimeout(() => {
       this.hass.callService('homeassistant', 'update_entity', { entity_id: mealSensorId });
     }, 800);
+  }
+
+  _renderRecipePickerModal() {
+    if (!this._recipePickerDate) return '';
+
+    const recipeSensorId = this.config.recipes_sensor || 'sensor.meal_planner_recipes';
+    const recipesSensor = this.hass.states[recipeSensorId];
+    const rawRecipes = this._extractRawList(recipesSensor);
+
+    const combinedMap = new Map();
+    rawRecipes.map(d => this._parseRecipeDoc(d)).filter(Boolean).forEach(r => combinedMap.set(r.id, r));
+    (this._directRecipes || []).forEach(r => combinedMap.set(r.id, r));
+
+    const allRecipes = Array.from(combinedMap.values()).sort((a, b) => a.title.localeCompare(b.title));
+
+    // Extract categories / tags
+    const categoriesSet = new Set(['ALL']);
+    allRecipes.forEach(r => {
+      if (Array.isArray(r.tags)) {
+        r.tags.forEach(t => categoriesSet.add(t));
+      }
+      if (r.category) categoriesSet.add(r.category);
+    });
+    const categories = Array.from(categoriesSet);
+
+    const query = (this._recipeSearchQuery || '').toLowerCase().trim();
+    const catFilter = this._recipeCategoryFilter || 'ALL';
+
+    const filtered = allRecipes.filter(r => {
+      const matchQuery = !query || 
+        r.title.toLowerCase().includes(query) ||
+        (r.tags && r.tags.some(t => t.toLowerCase().includes(query))) ||
+        (r.category && r.category.toLowerCase().includes(query));
+      
+      const matchCat = catFilter === 'ALL' ||
+        (r.tags && r.tags.includes(catFilter)) ||
+        r.category === catFilter;
+
+      return matchQuery && matchCat;
+    });
+
+    const targetDate = new Date(this._recipePickerDate + 'T00:00:00');
+    const formattedDate = targetDate.toLocaleDateString('default', { weekday: 'long', month: 'short', day: 'numeric' });
+
+    return html`
+      <div class="modal-overlay" @click="${() => this._closeRecipePicker()}">
+        <div class="modal-card recipe-search-modal" @click="${e => e.stopPropagation()}">
+          <div class="modal-header" style="background: var(--nl-accent);">
+            <div>
+              <h2>Select Meal for ${formattedDate}</h2>
+              <p style="margin: 4px 0 0 0; font-size: 0.85rem; opacity: 0.9;">Search all ${allRecipes.length} recipes from your catalog</p>
+            </div>
+            <button @click="${() => this._closeRecipePicker()}">✕</button>
+          </div>
+
+          <div class="modal-content recipe-picker-body">
+            <!-- Search & Quick Action Bar -->
+            <div class="recipe-search-toolbar">
+              <div class="recipe-search-input-wrap">
+                <ha-icon icon="mdi:magnify" style="--mdc-icon-size: 20px; color: var(--nl-fg-sec);"></ha-icon>
+                <input 
+                  type="text" 
+                  class="recipe-search-input" 
+                  placeholder="Search recipes, ingredients, tags (e.g. Curry, High-Protein, Beef)..."
+                  .value="${this._recipeSearchQuery}"
+                  @input="${(e) => { this._recipeSearchQuery = e.target.value; this.requestUpdate(); }}"
+                  autofocus
+                />
+                ${this._recipeSearchQuery ? html`
+                  <button class="clear-search-btn" @click="${() => { this._recipeSearchQuery = ''; this.requestUpdate(); }}">✕</button>
+                ` : ''}
+              </div>
+
+              ${this.config.website_url ? html`
+                <button class="btn-sync-inline" @click="${() => this._syncRecipesFromWebsite()}" title="Re-fetch recipes from website">
+                  <ha-icon icon="mdi:refresh" class="${this._directRecipesLoading ? 'spin-icon' : ''}" style="--mdc-icon-size: 18px;"></ha-icon>
+                  <span>Sync</span>
+                </button>
+              ` : ''}
+            </div>
+
+            <!-- Categories / Tags Filter -->
+            ${categories.length > 1 ? html`
+              <div class="recipe-tags-scroll">
+                ${categories.map(c => html`
+                  <button 
+                    class="recipe-tag-pill ${catFilter === c ? 'active' : ''}"
+                    @click="${() => { this._recipeCategoryFilter = c; this.requestUpdate(); }}">
+                    ${c}
+                  </button>
+                `)}
+              </div>
+            ` : ''}
+
+            <!-- Quick Add Custom Option -->
+            <div class="recipe-custom-prompt" @click="${() => { const date = this._recipePickerDate; this._closeRecipePicker(); this._scheduleMeal(date, 'custom'); }}">
+              <div class="custom-icon">✏️</div>
+              <div class="custom-text">
+                <strong>Add a Custom / One-off Meal...</strong>
+                <span>Type in a custom title not currently in your recipe catalog</span>
+              </div>
+            </div>
+
+            <!-- Recipes List -->
+            <div class="recipes-results-list no-scrollbar">
+              ${filtered.length === 0 ? html`
+                <div class="no-recipes-found">
+                  <ha-icon icon="mdi:food-off-outline" style="--mdc-icon-size: 40px; color: var(--nl-fg-sec);"></ha-icon>
+                  <p>No recipes found matching "<strong>${this._recipeSearchQuery}</strong>"</p>
+                  <button class="btn-primary" style="margin-top: 8px;" @click="${() => { const date = this._recipePickerDate; this._closeRecipePicker(); this._scheduleMeal(date, 'custom'); }}">
+                    ✏️ Enter "${this._recipeSearchQuery}" as Custom Meal
+                  </button>
+                </div>
+              ` : filtered.map(r => {
+                let recipeUrl = r.url;
+                if (!recipeUrl && this.config.website_url) {
+                  recipeUrl = `${this.config.website_url.replace(/\/$/, '')}/recipe/${r.id}`;
+                }
+
+                return html`
+                  <div class="recipe-result-item" @click="${() => { const date = this._recipePickerDate; this._closeRecipePicker(); this._scheduleMeal(date, r.id); }}">
+                    <div class="recipe-result-info">
+                      <div class="recipe-result-title-row">
+                        <span class="recipe-result-title">${r.title}</span>
+                        ${recipeUrl ? html`
+                          <a href="${recipeUrl}" target="_blank" rel="noopener noreferrer" class="recipe-result-ext-link" @click="${(e) => e.stopPropagation()}" title="View Recipe on Website">
+                            <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size: 18px;"></ha-icon>
+                          </a>
+                        ` : ''}
+                      </div>
+
+                      <div class="recipe-result-meta">
+                        ${(r.prepTime || r.cookTime) ? html`
+                          <span class="recipe-meta-pill">
+                            <ha-icon icon="mdi:clock-outline" style="--mdc-icon-size: 14px;"></ha-icon>
+                            ${(r.prepTime || 0) + (r.cookTime || 0)} min
+                          </span>
+                        ` : ''}
+                        ${r.servings ? html`
+                          <span class="recipe-meta-pill">
+                            <ha-icon icon="mdi:account-group-outline" style="--mdc-icon-size: 14px;"></ha-icon>
+                            ${r.servings} srv
+                          </span>
+                        ` : ''}
+                        ${r.macros?.calories ? html`
+                          <span class="recipe-meta-pill cal">${r.macros.calories} kcal</span>
+                        ` : ''}
+                        ${r.macros?.protein ? html`
+                          <span class="recipe-meta-pill pro">${r.macros.protein}g P</span>
+                        ` : ''}
+                      </div>
+                    </div>
+                    <button class="recipe-pick-btn" title="Schedule this recipe">Select</button>
+                  </div>
+                `;
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   _inferCategory(name) {
@@ -1849,20 +2118,83 @@ class NightlightDashboard extends LitElement {
       .task-row.completed { opacity: 0.6; text-decoration: line-through; background: transparent; border-style: dashed; }
       .task-row.completed ha-icon { color: #10B981; }
       
+      .meals-header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
+      .meals-sync-info { display: flex; align-items: center; gap: 12px; }
+      .recipe-count-badge { display: inline-flex; align-items: center; gap: 6px; background: var(--nl-surface); border: 1px solid var(--nl-border); padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600; color: var(--nl-fg); }
+      .syncing-indicator { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--nl-accent); font-weight: 500; }
+      .spin-icon { animation: spin 1.2s linear infinite; }
+      @keyframes spin { 100% { transform: rotate(360deg); } }
+      .meals-actions { display: flex; gap: 10px; align-items: center; }
+      .btn-meals-action { display: inline-flex; align-items: center; gap: 6px; background: var(--nl-surface); border: 1px solid var(--nl-border); padding: 8px 14px; border-radius: 10px; color: var(--nl-fg); font-size: 0.85rem; font-weight: 600; cursor: pointer; text-decoration: none; transition: all 0.2s; }
+      .btn-meals-action:hover { background: var(--nl-bg); border-color: var(--nl-accent); color: var(--nl-accent); }
+
       .meals-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; }
-      .meal-card { background: var(--nl-surface); border: 1px solid var(--nl-border); border-radius: 20px; padding: 20px; display: flex; flex-direction: column; box-shadow: var(--nl-shadow); transition: transform 0.2s; min-height: 180px; }
+      .meal-card { background: var(--nl-surface); border: 1px solid var(--nl-border); border-radius: 20px; padding: 20px; display: flex; flex-direction: column; box-shadow: var(--nl-shadow); transition: transform 0.2s; min-height: 190px; }
       .meal-card:hover { transform: translateY(-4px); }
       .meal-header { display: flex; justify-content: space-between; align-items: center; font-weight: 800; color: var(--nl-accent); margin-bottom: 12px; text-transform: uppercase; font-size: 0.85rem; letter-spacing: 1px; }
       .meal-date { color: var(--nl-fg-sec); font-weight: 600; }
       .meal-card.today { border-color: var(--nl-accent); background: rgba(59, 130, 246, 0.05); }
-      .meal-content { display: flex; flex-direction: column; gap: 12px; flex: 1; }
-      .meal-select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--nl-border); background: var(--nl-bg); color: var(--nl-fg); font-family: inherit; font-size: 1rem; outline: none; cursor: pointer; }
+      .meal-content { display: flex; flex-direction: column; gap: 12px; flex: 1; justify-content: space-between; }
+      
+      .meal-picker-box { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+      .meal-current-display { background: var(--nl-bg); border: 1px solid var(--nl-border); border-radius: 10px; padding: 10px 12px; min-height: 44px; display: flex; align-items: center; }
+      .meal-title-row { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 8px; }
+      .meal-active-title { font-size: 0.95rem; color: var(--nl-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+      .meal-empty-title { font-size: 0.9rem; color: var(--nl-fg-sec); font-style: italic; }
+      .meal-link-btn { color: var(--nl-accent); display: flex; align-items: center; justify-content: center; text-decoration: none; opacity: 0.8; transition: opacity 0.2s; }
+      .meal-link-btn:hover { opacity: 1; }
+      
+      .meal-button-row { display: flex; gap: 8px; align-items: center; width: 100%; }
+      .btn-meal-search { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: var(--nl-surface); border: 1px solid var(--nl-border); padding: 8px 12px; border-radius: 8px; color: var(--nl-fg); font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+      .btn-meal-search:hover { background: var(--nl-bg); border-color: var(--nl-accent); color: var(--nl-accent); }
+      .btn-meal-clear { background: var(--nl-surface); border: 1px solid var(--nl-border); color: #EF4444; border-radius: 8px; padding: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+      .btn-meal-clear:hover { background: rgba(239, 68, 68, 0.1); border-color: #EF4444; }
+
       .meal-macros { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; }
       .macro { font-size: 0.75rem; padding: 4px 8px; border-radius: 12px; font-weight: 600; }
       .macro.cal { background: rgba(239, 68, 68, 0.1); color: #EF4444; }
       .macro.pro { background: rgba(59, 130, 246, 0.1); color: #3B82F6; }
       .macro.carbs { background: rgba(16, 185, 129, 0.1); color: #10B981; }
       .macro.fat { background: rgba(245, 158, 11, 0.1); color: #F59E0B; }
+
+      /* Recipe Search Modal */
+      .recipe-search-modal { max-width: 650px; max-height: 85vh; display: flex; flex-direction: column; }
+      .recipe-picker-body { padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; overflow: hidden; flex: 1; }
+      .recipe-search-toolbar { display: flex; gap: 10px; align-items: center; }
+      .recipe-search-input-wrap { flex: 1; display: flex; align-items: center; gap: 8px; background: var(--nl-surface); border: 1px solid var(--nl-border); border-radius: 12px; padding: 0 12px; }
+      .recipe-search-input { flex: 1; border: none; background: transparent; padding: 12px 0; font-size: 1rem; color: var(--nl-fg); outline: none; font-family: inherit; }
+      .clear-search-btn { background: none; border: none; color: var(--nl-fg-sec); cursor: pointer; font-size: 1rem; padding: 4px; }
+      .btn-sync-inline { display: flex; align-items: center; gap: 6px; background: var(--nl-surface); border: 1px solid var(--nl-border); padding: 10px 14px; border-radius: 12px; color: var(--nl-fg); font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+      .btn-sync-inline:hover { border-color: var(--nl-accent); color: var(--nl-accent); }
+
+      .recipe-tags-scroll { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+      .recipe-tag-pill { background: var(--nl-surface); border: 1px solid var(--nl-border); color: var(--nl-fg-sec); padding: 6px 12px; border-radius: 16px; font-size: 0.8rem; font-weight: 600; cursor: pointer; white-space: nowrap; transition: all 0.2s; }
+      .recipe-tag-pill:hover { border-color: var(--nl-accent); color: var(--nl-fg); }
+      .recipe-tag-pill.active { background: var(--nl-accent); border-color: var(--nl-accent); color: #fff; }
+
+      .recipe-custom-prompt { display: flex; align-items: center; gap: 12px; background: var(--nl-surface); border: 1px dashed var(--nl-border); border-radius: 12px; padding: 12px 16px; cursor: pointer; transition: all 0.2s; }
+      .recipe-custom-prompt:hover { border-color: var(--nl-accent); background: rgba(59, 130, 246, 0.05); }
+      .custom-icon { font-size: 1.2rem; }
+      .custom-text { display: flex; flex-direction: column; gap: 2px; }
+      .custom-text strong { font-size: 0.9rem; color: var(--nl-fg); }
+      .custom-text span { font-size: 0.75rem; color: var(--nl-fg-sec); }
+
+      .recipes-results-list { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; max-height: 380px; padding-right: 4px; }
+      .recipe-result-item { display: flex; justify-content: space-between; align-items: center; background: var(--nl-surface); border: 1px solid var(--nl-border); border-radius: 12px; padding: 14px 16px; cursor: pointer; transition: all 0.2s; gap: 12px; }
+      .recipe-result-item:hover { border-color: var(--nl-accent); transform: translateX(3px); background: var(--nl-bg); }
+      .recipe-result-info { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+      .recipe-result-title-row { display: flex; align-items: center; gap: 8px; }
+      .recipe-result-title { font-weight: 700; font-size: 1rem; color: var(--nl-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .recipe-result-ext-link { color: var(--nl-accent); display: flex; align-items: center; text-decoration: none; opacity: 0.7; transition: opacity 0.2s; }
+      .recipe-result-ext-link:hover { opacity: 1; }
+      .recipe-result-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+      .recipe-meta-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 0.75rem; color: var(--nl-fg-sec); background: var(--nl-bg); border: 1px solid var(--nl-border); padding: 2px 8px; border-radius: 8px; font-weight: 500; }
+      .recipe-meta-pill.cal { color: #EF4444; border-color: rgba(239, 68, 68, 0.2); }
+      .recipe-meta-pill.pro { color: #3B82F6; border-color: rgba(59, 130, 246, 0.2); }
+      .recipe-pick-btn { background: var(--nl-accent); color: white; border: none; padding: 8px 16px; border-radius: 8px; font-size: 0.85rem; font-weight: 700; cursor: pointer; transition: opacity 0.2s; }
+      .recipe-pick-btn:hover { opacity: 0.9; }
+
+      .no-recipes-found { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 16px; text-align: center; color: var(--nl-fg-sec); }
 
       /* Shopping List */
       .shopping-container { display: flex; flex-direction: column; gap: 24px; max-width: 600px; margin: 0 auto; width: 100%; }
