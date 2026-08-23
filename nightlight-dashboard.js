@@ -292,20 +292,47 @@ class NightlightDashboard extends LitElement {
     const startStr = start.toISOString();
     const endStr = end.toISOString();
 
-    const filteredEntities = (this.config.entities || []).filter(e => e.entity.startsWith('calendar'));
-    const promises = filteredEntities.map(ent => {
-      return this.hass.callApi('GET', `calendars/${ent.entity}?start=${startStr}&end=${endStr}`)
-        .then(evs => evs.map(e => {
-          const stateObj = this.hass.states[ent.entity];
-          return {
+    const filteredEntities = (this.config.entities || []).filter(e => (typeof e === 'string' ? e : e.entity || '').startsWith('calendar'));
+    const promises = filteredEntities.map(async ent => {
+      const entityId = typeof ent === 'string' ? ent : ent.entity;
+      const color = ent.color || '#7b61ff';
+      const stateObj = this.hass.states[entityId];
+      const friendly_name = (stateObj && stateObj.attributes) ? stateObj.attributes.friendly_name : entityId;
+      const icon = (stateObj && stateObj.attributes) ? stateObj.attributes.icon : null;
+
+      // Try REST API first, then WebSocket if available
+      try {
+        const evs = await this.hass.callApi('GET', `calendars/${entityId}?start=${startStr}&end=${endStr}`);
+        if (Array.isArray(evs)) {
+          return evs.map(e => ({
             ...e,
-            color: ent.color || '#7b61ff',
-            origin: ent.entity,
-            friendly_name: (stateObj && stateObj.attributes) ? stateObj.attributes.friendly_name : ent.entity,
-            icon: (stateObj && stateObj.attributes) ? stateObj.attributes.icon : null
-          };
-        }))
-        .catch(() => []);
+            color,
+            origin: entityId,
+            friendly_name,
+            icon
+          }));
+        }
+      } catch (err) {
+        // Fallback: try websocket calendar/event/list if supported
+        try {
+          const res = await this.hass.callWS({
+            type: 'calendar/event/list',
+            entity_id: entityId,
+            start_date_time: startStr,
+            end_date_time: endStr
+          });
+          if (res && Array.isArray(res.events)) {
+            return res.events.map(e => ({
+              ...e,
+              color,
+              origin: entityId,
+              friendly_name,
+              icon
+            }));
+          }
+        } catch (_) {}
+      }
+      return [];
     });
     const results = await Promise.all(promises);
     this._events = results.flat();
