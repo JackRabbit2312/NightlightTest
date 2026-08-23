@@ -42,7 +42,9 @@ class NightlightDashboard extends LitElement {
       _customMealInput: { type: String },
       _customMealCalories: { type: String },
       _customMealCookTime: { type: String },
-      _localMealOverrides: { type: Object }
+      _localMealOverrides: { type: Object },
+      _choreSelectedDay: { type: String },
+      _choreSelectedPeriod: { type: String }
     };
   }
 
@@ -97,6 +99,159 @@ class NightlightDashboard extends LitElement {
     this._customMealCalories = '';
     this._customMealCookTime = '';
     this._localMealOverrides = {};
+    this._choreSelectedDay = 'today';
+    this._choreSelectedPeriod = 'auto';
+  }
+
+  // --- Chore Parsing & Day Logic ---
+
+  _parseChoreItem(rawItem, kidConfig = {}) {
+    const item = typeof rawItem === 'string' ? { summary: rawItem } : { ...rawItem };
+    let summary = (item.summary || item.name || item.title || "").trim();
+    const originalSummary = summary;
+    
+    let allowedDays = new Set();
+    let dayTag = "";
+    let periodIndex = 0;
+
+    // 1. Extract Period prefix or tag (e.g. "1. Task", "[Morning] Task", or item.period)
+    if (item.period !== undefined) {
+      if (typeof item.period === 'number') {
+        periodIndex = item.period;
+      } else if (typeof item.period === 'string') {
+        const pLower = item.period.toLowerCase();
+        if (pLower.includes('morn') || pLower === '1') periodIndex = 1;
+        else if (pLower.includes('after') || pLower.includes('noon') || pLower === '2') periodIndex = 2;
+        else if (pLower.includes('even') || pLower.includes('night') || pLower === '3') periodIndex = 3;
+      }
+    }
+
+    // Check for [Morning], [Afternoon], [Evening] tag
+    const periodTagMatch = summary.match(/^\[(Morning|Afternoon|Evening|Night|Period\s*\d+)\]\s*(.*)$/i);
+    if (periodTagMatch) {
+      const pTag = periodTagMatch[1].toLowerCase();
+      if (pTag.includes('morn')) periodIndex = 1;
+      else if (pTag.includes('after') || pTag.includes('noon')) periodIndex = 2;
+      else if (pTag.includes('even') || pTag.includes('night')) periodIndex = 3;
+      else {
+        const numMatch = pTag.match(/\d+/);
+        if (numMatch) periodIndex = parseInt(numMatch[0]);
+      }
+      summary = periodTagMatch[2].trim();
+    }
+
+    // Check for "1. ", "2. ", "3. " prefix
+    const numPrefixMatch = summary.match(/^([1-9])\.\s*(.*)$/);
+    if (numPrefixMatch) {
+      if (periodIndex === 0) {
+        periodIndex = parseInt(numPrefixMatch[1]);
+      }
+      summary = numPrefixMatch[2].trim();
+    }
+
+    // 2. Extract Day Tags (e.g. "[Mon, Wed, Fri]", "[Weekday]", "[Weekend]", "(Sat, Sun)", "Mon: ...")
+    const dayMap = {
+      'sun': 0, 'sunday': 0, 'su': 0,
+      'mon': 1, 'monday': 1, 'm': 1, 'mo': 1,
+      'tue': 2, 'tues': 2, 'tuesday': 2, 'tu': 2,
+      'wed': 3, 'wednesday': 3, 'w': 3, 'we': 3,
+      'thu': 4, 'thur': 4, 'thurs': 4, 'thursday': 4, 'th': 4,
+      'fri': 5, 'friday': 5, 'f': 5, 'fr': 5,
+      'sat': 6, 'saturday': 6, 'sa': 6
+    };
+
+    // Pattern A: [Mon, Wed] or [Weekday] or [Weekend] or [Mon-Fri]
+    const bracketMatch = summary.match(/^\[(.*?)\]\s*(.*)$/);
+    // Pattern B: (Mon, Wed)
+    const parenMatch = !bracketMatch ? summary.match(/^\((.*?)\)\s*(.*)$/) : null;
+    // Pattern C: Mon, Wed: ...
+    const colonMatch = (!bracketMatch && !parenMatch) ? summary.match(/^([A-Za-z\s,\/&-]+):\s*(.*)$/) : null;
+
+    const matchedTag = bracketMatch ? bracketMatch[1] : (parenMatch ? parenMatch[1] : (colonMatch ? colonMatch[1] : null));
+
+    if (matchedTag) {
+      const tagLower = matchedTag.toLowerCase().trim();
+      let matchedValidDays = false;
+
+      if (tagLower.includes('weekday')) {
+        [1, 2, 3, 4, 5].forEach(d => allowedDays.add(d));
+        dayTag = 'Weekdays';
+        matchedValidDays = true;
+      } else if (tagLower.includes('weekend')) {
+        [0, 6].forEach(d => allowedDays.add(d));
+        dayTag = 'Weekend';
+        matchedValidDays = true;
+      } else if (tagLower.includes('daily') || tagLower.includes('everyday') || tagLower === 'all') {
+        [0, 1, 2, 3, 4, 5, 6].forEach(d => allowedDays.add(d));
+        dayTag = '';
+        matchedValidDays = true;
+      } else if (tagLower.includes('mon-fri') || tagLower.includes('m-f')) {
+        [1, 2, 3, 4, 5].forEach(d => allowedDays.add(d));
+        dayTag = 'Mon–Fri';
+        matchedValidDays = true;
+      } else if (tagLower.includes('sat-sun')) {
+        [0, 6].forEach(d => allowedDays.add(d));
+        dayTag = 'Sat–Sun';
+        matchedValidDays = true;
+      } else {
+        const tokens = tagLower.split(/[\s,\/&]+/).map(t => t.trim()).filter(Boolean);
+        let count = 0;
+        tokens.forEach(t => {
+          if (dayMap[t] !== undefined) {
+            allowedDays.add(dayMap[t]);
+            count++;
+          }
+        });
+        if (count > 0) {
+          matchedValidDays = true;
+          // Format pretty tag
+          dayTag = matchedTag;
+        }
+      }
+
+      if (matchedValidDays) {
+        summary = bracketMatch ? bracketMatch[2].trim() : (parenMatch ? parenMatch[2].trim() : colonMatch[2].trim());
+      }
+    }
+
+    // Re-check for number prefix in case day was first (e.g. "[Mon] 1. Take out bins")
+    if (periodIndex === 0) {
+      const secondNumMatch = summary.match(/^([1-9])\.\s*(.*)$/);
+      if (secondNumMatch) {
+        periodIndex = parseInt(secondNumMatch[1]);
+        summary = secondNumMatch[2].trim();
+      }
+    }
+
+    // Check item.days or kidConfig.days if specified in YAML configuration
+    const itemDays = item.days || kidConfig.days;
+    if (allowedDays.size === 0 && itemDays && Array.isArray(itemDays) && itemDays.length > 0) {
+      itemDays.forEach(d => {
+        const dLower = String(d).toLowerCase().trim();
+        if (dayMap[dLower] !== undefined) allowedDays.add(dayMap[dLower]);
+        else if (dLower.includes('weekday')) [1, 2, 3, 4, 5].forEach(x => allowedDays.add(x));
+        else if (dLower.includes('weekend')) [0, 6].forEach(x => allowedDays.add(x));
+      });
+      if (allowedDays.size > 0 && !dayTag) {
+        dayTag = itemDays.join(', ');
+      }
+    }
+
+    // If no specific days restricted, default to all 7 days
+    const isEveryday = allowedDays.size === 0 || allowedDays.size === 7;
+    if (allowedDays.size === 0) {
+      [0, 1, 2, 3, 4, 5, 6].forEach(d => allowedDays.add(d));
+    }
+
+    return {
+      ...item,
+      label: summary || originalSummary,
+      original_summary: originalSummary,
+      period_index: periodIndex,
+      allowed_days: Array.from(allowedDays),
+      day_tag: dayTag,
+      is_everyday: isEveryday
+    };
   }
 
   setConfig(config) {
@@ -187,37 +342,54 @@ class NightlightDashboard extends LitElement {
   async _fetchChoreData() {
     if (!this.hass || !this.config.chores) return;
 
+    // Normalize config.chores: could be array of kid objects or object mapping kidName -> items
+    let kids = [];
+    if (Array.isArray(this.config.chores)) {
+      kids = this.config.chores;
+    } else if (typeof this.config.chores === 'object') {
+      kids = Object.entries(this.config.chores).map(([name, val]) => {
+        if (Array.isArray(val)) {
+          return { name, items: val };
+        }
+        return { name, ...val };
+      });
+    }
+
     const allItems = [];
-    for (const kid of this.config.chores) {
+    for (const kid of kids) {
+      // 1. Fetch from Home Assistant todo entity if configured
       if (kid.todo_list) {
         try {
-          // Fetch items using standard WebSocket (efficient equivalent of todo.get_items)
           const result = await this.hass.callWS({
             type: "todo/item/list",
             entity_id: kid.todo_list,
           });
           
-          const taggedItems = (result.items || []).map(item => {
-            const newItem = JSON.parse(JSON.stringify(item));
-            newItem.list_id = kid.todo_list;
-            
-            // Logic for 1. 2. 3. prefixes to differentiate Morning/Afternoon/Night
-            const summary = newItem.summary || "";
-            const match = summary.match(/^([1-3])\.\s*(.*)/);
-            if (match) {
-                newItem.period_index = parseInt(match[1]); // 1, 2, or 3
-                newItem.label = match[2]; // Truncated text (e.g., "Brush Teeth")
-            } else {
-                newItem.period_index = 0; // No prefix found
-                newItem.label = summary;
-            }
-            
-            return newItem;
+          const taggedItems = (result.items || []).map((item, idx) => {
+            const parsed = this._parseChoreItem(item, kid);
+            parsed.list_id = kid.todo_list;
+            parsed.kid_name = kid.name;
+            parsed.uid = item.uid || `chore_${kid.name}_${idx}`;
+            return parsed;
           });
           allItems.push(...taggedItems);
         } catch (e) {
           console.warn("Chore fetch failed for", kid.todo_list);
         }
+      }
+
+      // 2. Direct YAML items if configured (e.g. kid.items or kid.chores)
+      const directItems = kid.items || (Array.isArray(kid.chores) ? kid.chores : null);
+      if (directItems && Array.isArray(directItems)) {
+        const localItems = directItems.map((item, idx) => {
+          const parsed = this._parseChoreItem(item, kid);
+          parsed.list_id = kid.todo_list || `local_${kid.name}`;
+          parsed.kid_name = kid.name;
+          parsed.uid = parsed.uid || `local_${kid.name}_${idx}`;
+          parsed.status = parsed.status || (this._localChoreStatus?.[parsed.uid] || 'needs_action');
+          return parsed;
+        });
+        allItems.push(...localItems);
       }
     }
     this._todoItems = allItems;
@@ -229,7 +401,8 @@ class NightlightDashboard extends LitElement {
     const today = new Date().toDateString();
 
     if (this._lastResetDate !== today) {
-      for (const kid of this.config.chores) {
+      let kids = Array.isArray(this.config.chores) ? this.config.chores : Object.values(this.config.chores);
+      for (const kid of kids) {
         if (kid.todo_list && this.hass.states[kid.todo_list]) {
           try {
              const result = await this.hass.callWS({
@@ -252,6 +425,7 @@ class NightlightDashboard extends LitElement {
           }
         }
       }
+      this._localChoreStatus = {};
       localStorage.setItem('nightlight_reset_date', today);
       this._lastResetDate = today;
     }
@@ -264,21 +438,25 @@ class NightlightDashboard extends LitElement {
     // Optimistic UI update
     const oldStatus = item.status;
     item.status = newStatus;
+    if (item.list_id && item.list_id.startsWith('local_')) {
+      this._localChoreStatus = this._localChoreStatus || {};
+      this._localChoreStatus[item.uid] = newStatus;
+    }
     this.requestUpdate();
 
-    try {
-      await this.hass.callService('todo', 'update_item', {
-        entity_id: item.list_id,
-        item: item.uid || item.summary, // Use original summary (with prefix) or UID
-        status: newStatus
-      });
-      // Background refresh to ensure sync
-      this._fetchChoreData();
-    } catch (e) {
-      console.error("Todo Toggle Failed:", e);
-      // Revert on failure
-      item.status = oldStatus;
-      this.requestUpdate();
+    if (item.list_id && !item.list_id.startsWith('local_')) {
+      try {
+        await this.hass.callService('todo', 'update_item', {
+          entity_id: item.list_id,
+          item: item.uid || item.original_summary || item.summary,
+          status: newStatus
+        });
+        this._fetchChoreData();
+      } catch (e) {
+        console.error("Todo Toggle Failed:", e);
+        item.status = oldStatus;
+        this.requestUpdate();
+      }
     }
   }
 
@@ -2540,18 +2718,25 @@ class NightlightDashboard extends LitElement {
   }
 
   _renderChoreDashboard() {
-    if (!this.config.chores || !this.config.periods) return html`<div class="empty-state">Chores not configured.</div>`;
+    if (!this.config.chores) return html`<div class="empty-state">Chores not configured.</div>`;
 
     const now = new Date();
     const currentMins = now.getHours() * 60 + now.getMinutes();
     const currentUser = this.hass.user ? this.hass.user.name : null;
     const isAdmin = this.hass.user ? this.hass.user.is_admin : false;
+    const todayDayIdx = now.getDay(); // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+
+    const periods = this.config.periods || [
+      { name: "Morning", start: "06:00", end: "09:00" },
+      { name: "Afternoon", start: "09:01", end: "17:00" },
+      { name: "Evening", start: "17:01", end: "21:00" }
+    ];
 
     // Determine Active Period based on config.periods array order
     let activePeriodIndex = -1;
-    const activePeriod = this.config.periods.find((p, index) => {
-      const [sh, sm] = p.start.split(':').map(Number);
-      const [eh, em] = p.end.split(':').map(Number);
+    let activePeriod = periods.find((p, index) => {
+      const [sh, sm] = (p.start || "00:00").split(':').map(Number);
+      const [eh, em] = (p.end || "23:59").split(':').map(Number);
       const start = sh * 60 + sm;
       const end = eh * 60 + em;
       if (currentMins >= start && currentMins <= end) {
@@ -2561,48 +2746,192 @@ class NightlightDashboard extends LitElement {
       return false;
     });
 
-    if (!activePeriod) return html`
-      <div class="chore-center-message">
-        <ha-icon icon="mdi:sleep" style="font-size: 64px; opacity: 0.5;"></ha-icon>
-        <h2>No Active Chore Period</h2>
-        <p>Check back later.</p>
-      </div>`;
+    if (!activePeriod && periods.length > 0) {
+      activePeriod = periods[0];
+      activePeriodIndex = 0;
+    }
 
-    // Map 1st period -> Prefix "1.", 2nd -> "2.", etc.
-    const targetPrefix = activePeriodIndex + 1; 
+    // Selected Day resolution
+    const selectedDay = this._choreSelectedDay || 'today';
+    let filterDayIdx = null; // null means 'all'
+    if (selectedDay === 'today') {
+      filterDayIdx = todayDayIdx;
+    } else if (selectedDay !== 'all') {
+      filterDayIdx = parseInt(selectedDay);
+    }
 
-    const visibleKids = this.config.chores.filter(kid => 
+    // Selected Period resolution
+    const selectedPeriod = this._choreSelectedPeriod || 'auto';
+    let filterPeriodIndex = null; // null means 'all'
+    if (selectedPeriod === 'auto') {
+      filterPeriodIndex = activePeriodIndex + 1; // 1-based index (1=Morning, 2=Afternoon, 3=Evening)
+    } else if (selectedPeriod !== 'all') {
+      filterPeriodIndex = parseInt(selectedPeriod);
+    }
+
+    // Normalize kids
+    let kids = [];
+    if (Array.isArray(this.config.chores)) {
+      kids = this.config.chores;
+    } else if (typeof this.config.chores === 'object') {
+      kids = Object.entries(this.config.chores).map(([name, val]) => {
+        if (Array.isArray(val)) return { name, items: val };
+        return { name, ...val };
+      });
+    }
+
+    const visibleKids = kids.filter(kid => 
       isAdmin || !kid.assigned_user || kid.assigned_user === currentUser
     );
 
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const fullDayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+    // Helper to count tasks for a kid on a specific day
+    const getKidDayTaskCount = (kid, dayIdx) => {
+      return (this._todoItems || []).filter(item => {
+        const matchesKid = (item.list_id === kid.todo_list) || (item.kid_name === kid.name);
+        if (!matchesKid) return false;
+        if (dayIdx !== null && !item.allowed_days.includes(dayIdx)) return false;
+        return true;
+      }).length;
+    };
+
     return html`
       <div class="chore-dashboard">
-        <div class="period-badge">Current: ${activePeriod.name}</div>
+        <!-- Chore Filter Control Bar -->
+        <div class="chore-header-bar">
+          <!-- Day Selector Row -->
+          <div>
+            <div class="chore-group-title">Select Day</div>
+            <div class="chore-pills-wrap">
+              <button 
+                class="chore-pill ${selectedDay === 'today' ? 'active' : ''}"
+                @click="${() => { this._choreSelectedDay = 'today'; this.requestUpdate(); }}">
+                <span class="today-indicator-dot"></span>
+                Today (${dayNames[todayDayIdx]})
+              </button>
+
+              ${[1, 2, 3, 4, 5, 6, 0].map(dayIdx => {
+                const isToday = dayIdx === todayDayIdx;
+                const isSelected = selectedDay === String(dayIdx);
+                return html`
+                  <button 
+                    class="chore-pill ${isSelected ? 'active' : ''}"
+                    @click="${() => { this._choreSelectedDay = String(dayIdx); this.requestUpdate(); }}">
+                    ${dayNames[dayIdx]}
+                    ${isToday ? html`<span class="today-indicator-dot"></span>` : ''}
+                  </button>
+                `;
+              })}
+
+              <button 
+                class="chore-pill ${selectedDay === 'all' ? 'active' : ''}"
+                @click="${() => { this._choreSelectedDay = 'all'; this.requestUpdate(); }}">
+                All Days
+              </button>
+            </div>
+          </div>
+
+          <!-- Period Selector Row -->
+          <div style="border-top: 1px solid var(--nl-border); padding-top: 10px;">
+            <div class="chore-group-title">Time of Day</div>
+            <div class="chore-pills-wrap">
+              <button 
+                class="chore-pill ${selectedPeriod === 'auto' ? 'active' : ''}"
+                @click="${() => { this._choreSelectedPeriod = 'auto'; this.requestUpdate(); }}">
+                ⚡ Auto: ${activePeriod ? activePeriod.name : 'Current'}
+              </button>
+
+              ${periods.map((p, idx) => {
+                const pNum = idx + 1;
+                const isSelected = selectedPeriod === String(pNum);
+                return html`
+                  <button 
+                    class="chore-pill ${isSelected ? 'active' : ''}"
+                    @click="${() => { this._choreSelectedPeriod = String(pNum); this.requestUpdate(); }}">
+                    ${p.name}
+                  </button>
+                `;
+              })}
+
+              <button 
+                class="chore-pill ${selectedPeriod === 'all' ? 'active' : ''}"
+                @click="${() => { this._choreSelectedPeriod = 'all'; this.requestUpdate(); }}">
+                All Periods
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Kid Chore Cards Grid -->
         <div class="chore-grid">
           ${visibleKids.map(kid => {
-             // Filter tasks matching kid's list ID AND current period prefix (1., 2., 3.)
-             const tasks = (this._todoItems || []).filter(i => 
-                 i.list_id === kid.todo_list && 
-                 (i.period_index === targetPrefix)
+             // Filter tasks matching kid's list ID / name AND selected day AND selected period
+             const allKidTasks = (this._todoItems || []).filter(i => 
+                 (i.list_id === kid.todo_list) || (i.kid_name === kid.name)
              );
-             
-             if (tasks.length === 0) return '';
-             
+
+             const dayFilteredTasks = allKidTasks.filter(item => {
+               if (filterDayIdx !== null && !item.allowed_days.includes(filterDayIdx)) {
+                 return false;
+               }
+               return true;
+             });
+
+             const tasks = dayFilteredTasks.filter(item => {
+               if (filterPeriodIndex !== null && item.period_index > 0 && item.period_index !== filterPeriodIndex) {
+                 return false;
+               }
+               return true;
+             });
+
+             const completedCount = tasks.filter(t => t.status === 'completed').length;
+             const totalCount = tasks.length;
+             const allDone = totalCount > 0 && completedCount === totalCount;
+             const activeDayLabel = filterDayIdx !== null ? fullDayNames[filterDayIdx] : 'All Days';
+
              return html`
                <div class="kid-card">
                  <div class="kid-hero" style="background-image: url('${kid.image || ''}')">
                    <div class="hero-overlay">
-                     <h3>${kid.name}</h3>
+                     <div style="display: flex; justify-content: space-between; align-items: flex-end; width: 100%;">
+                       <div>
+                         <h3>${kid.name}</h3>
+                         <span style="font-size: 0.8rem; opacity: 0.9;">${activeDayLabel}</span>
+                       </div>
+                       ${totalCount > 0 ? html`
+                         <span class="kid-progress-badge ${allDone ? 'all-done' : ''}">
+                           ${allDone ? '🎉 All Done!' : `${completedCount} / ${totalCount} Done`}
+                         </span>
+                       ` : ''}
+                     </div>
                    </div>
                  </div>
+
                  <div class="task-list">
-                   ${tasks.map(item => {
+                   ${tasks.length === 0 ? html`
+                     <div class="chore-empty-kid">
+                       ✨ No chores scheduled for ${kid.name} on ${activeDayLabel.toLowerCase()}.
+                     </div>
+                   ` : tasks.map(item => {
                       const isDone = item.status === 'completed';
+                      let periodName = '';
+                      if (item.period_index > 0 && periods[item.period_index - 1]) {
+                        periodName = periods[item.period_index - 1].name;
+                      }
+
                       return html`
                         <div class="task-row ${isDone ? 'completed' : ''}"
                              @click="${() => this._toggleTodo(item)}">
                           <ha-icon icon="${isDone ? 'mdi:checkbox-marked-circle' : 'mdi:checkbox-blank-circle-outline'}"></ha-icon>
-                          <span>${item.label}</span>
+                          <span style="flex: 1; font-weight: 500;">${item.label}</span>
+                          ${item.day_tag && !item.is_everyday ? html`
+                            <span class="chore-tag" title="Days: ${item.day_tag}">🗓️ ${item.day_tag}</span>
+                          ` : ''}
+                          ${(selectedPeriod === 'all' || selectedPeriod === 'auto') && periodName ? html`
+                            <span class="chore-period-tag">${periodName}</span>
+                          ` : ''}
                         </div>
                       `;
                    })}
@@ -3090,18 +3419,32 @@ class NightlightDashboard extends LitElement {
       .connector-line { position: absolute; left: -29px; top: 40px; bottom: -40px; width: 4px; opacity: 0.3; z-index: 0; border-radius: 2px; }
 
       /* Modules: Chores, Meals, Notes */
-      .chore-dashboard { height: 100%; display: flex; flex-direction: column; }
-      .period-badge { align-self: flex-end; background: var(--nl-accent); color: #fff; padding: 6px 16px; border-radius: 20px; font-size: 0.9rem; font-weight: 700; margin-bottom: 24px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+      .chore-dashboard { height: 100%; display: flex; flex-direction: column; gap: 20px; }
+      .chore-header-bar { display: flex; flex-direction: column; gap: 12px; background: var(--nl-surface); border: 1px solid var(--nl-border); padding: 14px 18px; border-radius: 16px; box-shadow: var(--nl-shadow); }
+      .chore-group-title { font-size: 0.75rem; text-transform: uppercase; font-weight: 700; color: var(--nl-fg-sec); letter-spacing: 0.5px; margin-bottom: 6px; }
+      .chore-pills-wrap { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      .chore-pill { background: var(--nl-bg); border: 1px solid var(--nl-border); color: var(--nl-fg); padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px; }
+      .chore-pill:hover { border-color: var(--nl-accent); transform: translateY(-1px); }
+      .chore-pill.active { background: var(--nl-accent); border-color: var(--nl-accent); color: #fff; box-shadow: 0 2px 6px rgba(59, 130, 246, 0.3); }
+      .today-indicator-dot { width: 6px; height: 6px; border-radius: 50%; background: #10B981; }
+      .chore-pill.active .today-indicator-dot { background: #fff; }
+
       .chore-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; }
       .kid-card { background: var(--nl-surface); border-radius: 20px; overflow: hidden; border: 1px solid var(--nl-border); display: flex; flex-direction: column; box-shadow: var(--nl-shadow); }
       .kid-hero { height: 120px; background-size: cover; background-position: center; position: relative; }
-      .hero-overlay { position: absolute; bottom: 0; left: 0; right: 0; padding: 16px; background: linear-gradient(transparent, rgba(0,0,0,0.8)); color: #fff; }
-      .hero-overlay h3 { margin: 0; font-size: 1.4rem; font-weight: 700; }
+      .hero-overlay { position: absolute; bottom: 0; left: 0; right: 0; padding: 16px; background: linear-gradient(transparent, rgba(0,0,0,0.85)); color: #fff; }
+      .hero-overlay h3 { margin: 0; font-size: 1.35rem; font-weight: 700; }
+      .kid-progress-badge { font-size: 0.78rem; font-weight: 700; padding: 4px 10px; border-radius: 12px; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.25); color: #fff; backdrop-filter: blur(4px); }
+      .kid-progress-badge.all-done { background: #10B981; border-color: #10B981; color: #fff; }
+
       .task-list { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-      .task-row { display: flex; align-items: center; gap: 16px; padding: 16px; background: var(--nl-bg); border-radius: 12px; cursor: pointer; transition: all 0.2s; border: 1px solid var(--nl-border); }
+      .task-row { display: flex; align-items: center; gap: 14px; padding: 14px 16px; background: var(--nl-bg); border-radius: 12px; cursor: pointer; transition: all 0.2s; border: 1px solid var(--nl-border); }
       .task-row:hover { transform: translateX(4px); border-color: var(--nl-accent); }
       .task-row.completed { opacity: 0.6; text-decoration: line-through; background: transparent; border-style: dashed; }
       .task-row.completed ha-icon { color: #10B981; }
+      .chore-tag { font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; background: rgba(59, 130, 246, 0.12); color: var(--nl-accent); margin-left: auto; white-space: nowrap; border: 1px solid rgba(59, 130, 246, 0.2); }
+      .chore-period-tag { font-size: 0.72rem; font-weight: 600; padding: 3px 8px; border-radius: 6px; background: var(--nl-surface); color: var(--nl-fg-sec); border: 1px solid var(--nl-border); margin-left: 6px; white-space: nowrap; }
+      .chore-empty-kid { padding: 32px 16px; text-align: center; color: var(--nl-fg-sec); font-size: 0.9rem; font-style: italic; }
       
       .meals-header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
       .meals-week-nav { display: inline-flex; align-items: center; gap: 6px; background: var(--nl-surface); border: 1px solid var(--nl-border); padding: 4px 6px; border-radius: 12px; box-shadow: var(--nl-shadow); }
