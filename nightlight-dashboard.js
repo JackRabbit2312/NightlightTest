@@ -31,7 +31,13 @@ class NightlightDashboard extends LitElement {
       _recipeCategoryFilter: { type: String },
       _recipePickerDate: { type: String },
       _directRecipes: { type: Array },
-      _directRecipesLoading: { type: Boolean }
+      _directRecipesLoading: { type: Boolean },
+      _mealReferenceDate: { type: Object },
+      _customMealModalDate: { type: String },
+      _customMealInput: { type: String },
+      _customMealCalories: { type: String },
+      _customMealCookTime: { type: String },
+      _localMealOverrides: { type: Object }
     };
   }
 
@@ -58,6 +64,7 @@ class NightlightDashboard extends LitElement {
     this._activeView = 'calendar';
     this._calendarMode = 'month';
     this._referenceDate = new Date();
+    this._mealReferenceDate = new Date();
     this._events = [];
     this._activeCalendars = [];
     this._loading = false;
@@ -75,6 +82,11 @@ class NightlightDashboard extends LitElement {
     this._recipePickerDate = null;
     this._directRecipes = [];
     this._directRecipesLoading = false;
+    this._customMealModalDate = null;
+    this._customMealInput = '';
+    this._customMealCalories = '';
+    this._customMealCookTime = '';
+    this._localMealOverrides = {};
   }
 
   setConfig(config) {
@@ -358,11 +370,27 @@ class NightlightDashboard extends LitElement {
   // --- Interaction & Utils ---
 
   _navigate(dir) {
+    if (this._activeView === 'meals') {
+      this._navigateMealWeek(dir);
+      return;
+    }
     const d = new Date(this._referenceDate);
     if (this._calendarMode === 'month') d.setMonth(d.getMonth() + dir);
     else if (this._calendarMode === 'week') d.setDate(d.getDate() + (dir * 7));
     else d.setDate(d.getDate() + dir);
     this._referenceDate = d;
+  }
+
+  _navigateMealWeek(dir) {
+    const d = new Date(this._mealReferenceDate || new Date());
+    d.setDate(d.getDate() + (dir * 7));
+    this._mealReferenceDate = d;
+    this.requestUpdate();
+  }
+
+  _resetMealWeek() {
+    this._mealReferenceDate = new Date();
+    this.requestUpdate();
   }
 
   _togglePersona(id) {
@@ -592,10 +620,10 @@ class NightlightDashboard extends LitElement {
                 <h1>${headerTitle}</h1>
                 <div class="subtitle">
                    <span class="clock">${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                   ${this._activeView === 'calendar' ? html`
+                   ${(this._activeView === 'calendar' || this._activeView === 'meals') ? html`
                      <div class="nav-controls">
-                       <button @click="${() => this._navigate(-1)}"><ha-icon icon="mdi:chevron-left"></ha-icon></button>
-                       <button @click="${() => this._navigate(1)}"><ha-icon icon="mdi:chevron-right"></ha-icon></button>
+                       <button @click="${() => this._navigate(-1)}" title="${this._activeView === 'meals' ? 'Previous Week' : 'Previous'}"><ha-icon icon="mdi:chevron-left"></ha-icon></button>
+                       <button @click="${() => this._navigate(1)}" title="${this._activeView === 'meals' ? 'Next Week' : 'Next'}"><ha-icon icon="mdi:chevron-right"></ha-icon></button>
                      </div>
                    `: ''}
                 </div>
@@ -626,6 +654,7 @@ class NightlightDashboard extends LitElement {
         ${this._selectedEvent ? this._renderModal() : ''}
         ${this._showAddModal ? this._renderAddModal() : ''}
         ${this._recipePickerDate ? this._renderRecipePickerModal() : ''}
+        ${this._customMealModalDate ? this._renderCustomMealModal() : ''}
       </div>
     `;
   }
@@ -714,11 +743,15 @@ class NightlightDashboard extends LitElement {
       let recipeTitle = f.recipe_title?.stringValue || f.title?.stringValue || "";
       let macros = null;
       let url = f.url?.stringValue || "";
+      let prepTime = Number(f.prep_time?.integerValue ?? f.prep_time?.doubleValue ?? f.prepTime?.integerValue ?? f.prepTime?.doubleValue ?? 0);
+      let cookTime = Number(f.cook_time?.integerValue ?? f.cook_time?.doubleValue ?? f.cookTime?.integerValue ?? f.cookTime?.doubleValue ?? 0);
       
       if (f.recipe && f.recipe.mapValue && f.recipe.mapValue.fields) {
         const rf = f.recipe.mapValue.fields;
         recipeTitle = rf.title?.stringValue || recipeTitle;
         url = rf.url?.stringValue || rf.sourceUrl?.stringValue || url;
+        prepTime = Number(rf.prep_time?.integerValue ?? rf.prep_time?.doubleValue ?? rf.prepTime?.integerValue ?? rf.prepTime?.doubleValue ?? prepTime);
+        cookTime = Number(rf.cook_time?.integerValue ?? rf.cook_time?.doubleValue ?? rf.cookTime?.integerValue ?? rf.cookTime?.doubleValue ?? cookTime);
         if (rf.macros && rf.macros.mapValue && rf.macros.mapValue.fields) {
           const mf = rf.macros.mapValue.fields;
           macros = {
@@ -746,7 +779,7 @@ class NightlightDashboard extends LitElement {
           fat: Number(f.fat?.integerValue ?? f.fat?.doubleValue ?? 0)
         };
       }
-      return { id: date, date, recipeId, recipeTitle, macros, url };
+      return { id: date, date, recipeId, recipeTitle, macros, url, prepTime, cookTime };
     }
 
     // Format 2: Clean Standard REST JSON
@@ -754,6 +787,8 @@ class NightlightDashboard extends LitElement {
     const recipeId = doc.recipeId || doc.recipe_id || "";
     let recipeTitle = doc.recipeTitle || doc.recipe_title || doc.title || (doc.recipe && doc.recipe.title) || "";
     let url = doc.url || doc.link || doc.sourceUrl || (doc.recipe && (doc.recipe.url || doc.recipe.link)) || "";
+    const prepTime = Number(doc.prep_time || doc.prepTime || (doc.recipe && (doc.recipe.prepTime || doc.recipe.prep_time)) || 0);
+    const cookTime = Number(doc.cook_time || doc.cookTime || (doc.recipe && (doc.recipe.cookTime || doc.recipe.cook_time)) || 0);
     let macros = null;
     if (doc.macros) {
       macros = {
@@ -770,7 +805,7 @@ class NightlightDashboard extends LitElement {
         fat: Number(doc.fat || 0)
       };
     }
-    return { id: date, date, recipeId, recipeTitle, macros, url };
+    return { id: date, date, recipeId, recipeTitle, macros, url, prepTime, cookTime };
   }
 
   _parseRecipeDoc(doc) {
@@ -867,12 +902,53 @@ class NightlightDashboard extends LitElement {
 
     const recipes = Array.from(combinedMap.values()).sort((a, b) => a.title.localeCompare(b.title));
 
-    // Generate current week (Monday to Sunday)
-    const today = new Date();
-    const dayOfWeek = today.getDay(); // 0 is Sunday, 1 is Monday
-    const diffToMonday = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
-    const monday = new Date(today);
+    // Support meal_entities (e.g. Monday: input_text.dinner_plan_monday)
+    if (this.config.meal_entities && typeof this.config.meal_entities === 'object') {
+      const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      Object.keys(this.config.meal_entities).forEach(key => {
+        const entId = this.config.meal_entities[key];
+        const entState = this.hass?.states?.[entId]?.state;
+        if (entState && entState !== 'unknown' && entState !== 'unavailable' && entState.trim() !== '') {
+          // Match with day in active week
+          const matchedDay = weekDays.find(d => dayNames[d.getDay()].toLowerCase() === key.toLowerCase());
+          if (matchedDay) {
+            const dStr = matchedDay.getFullYear() + '-' + String(matchedDay.getMonth() + 1).padStart(2, '0') + '-' + String(matchedDay.getDate()).padStart(2, '0');
+            if (!mealsByDate[dStr] || !mealsByDate[dStr].recipeTitle) {
+              mealsByDate[dStr] = {
+                id: dStr,
+                date: dStr,
+                recipeTitle: entState,
+                recipeId: 'entity_' + entState.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
+                macros: null,
+                url: '',
+                prepTime: 0,
+                cookTime: 0
+              };
+            }
+          }
+        }
+      });
+    }
+
+    // Apply local optimistic overrides
+    if (this._localMealOverrides) {
+      Object.keys(this._localMealOverrides).forEach(dateStr => {
+        const override = this._localMealOverrides[dateStr];
+        if (override === null) {
+          delete mealsByDate[dateStr];
+        } else if (override) {
+          mealsByDate[dateStr] = override;
+        }
+      });
+    }
+
+    // Generate active week (Monday to Sunday) based on _mealReferenceDate
+    const ref = new Date(this._mealReferenceDate || new Date());
+    const dayOfWeek = ref.getDay(); // 0 is Sunday, 1 is Monday
+    const diffToMonday = ref.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+    const monday = new Date(ref);
     monday.setDate(diffToMonday);
+    monday.setHours(0, 0, 0, 0);
 
     const weekDays = [];
     for (let i = 0; i < 7; i++) {
@@ -880,27 +956,59 @@ class NightlightDashboard extends LitElement {
       d.setDate(monday.getDate() + i);
       weekDays.push(d);
     }
+    const sunday = weekDays[6];
+
+    const now = new Date();
+    const nowDayOfWeek = now.getDay();
+    const nowMonday = new Date(now);
+    nowMonday.setDate(now.getDate() - nowDayOfWeek + (nowDayOfWeek === 0 ? -6 : 1));
+    nowMonday.setHours(0, 0, 0, 0);
+    const isCurrentWeek = monday.toDateString() === nowMonday.toDateString();
+
+    const startMonth = monday.toLocaleDateString('default', { month: 'short' });
+    const endMonth = sunday.toLocaleDateString('default', { month: 'short' });
+    const weekRangeLabel = startMonth === endMonth
+      ? `${startMonth} ${monday.getDate()} – ${sunday.getDate()}, ${sunday.getFullYear()}`
+      : `${startMonth} ${monday.getDate()} – ${endMonth} ${sunday.getDate()}, ${sunday.getFullYear()}`;
 
     const websiteUrl = this.config.website_url;
 
     return html`
       <div class="meals-header-bar">
-        <div class="meals-sync-info">
-          <span class="recipe-count-badge">
-            <ha-icon icon="mdi:book-open-page-variant-outline" style="--mdc-icon-size: 16px;"></ha-icon>
-            ${recipes.length} Website Recipes Available
-          </span>
-          ${this._directRecipesLoading ? html`<span class="syncing-indicator"><ha-icon icon="mdi:loading" class="spin-icon"></ha-icon> Syncing recipes...</span>` : ''}
+        <div class="meals-week-nav">
+          <button class="btn-week-arrow" @click="${() => this._navigateMealWeek(-1)}" title="Previous Week">
+            <ha-icon icon="mdi:chevron-left" style="--mdc-icon-size: 20px;"></ha-icon>
+          </button>
+          <div class="meals-week-title">
+            <ha-icon icon="mdi:calendar-week" style="--mdc-icon-size: 18px; color: var(--nl-accent);"></ha-icon>
+            <span class="week-range-text">${weekRangeLabel}</span>
+            ${isCurrentWeek ? html`<span class="badge-this-week">This Week</span>` : html`
+              <button class="btn-jump-this-week" @click="${() => this._resetMealWeek()}" title="Jump to Current Week">
+                This Week
+              </button>
+            `}
+          </div>
+          <button class="btn-week-arrow" @click="${() => this._navigateMealWeek(1)}" title="Next Week">
+            <ha-icon icon="mdi:chevron-right" style="--mdc-icon-size: 20px;"></ha-icon>
+          </button>
         </div>
+
         <div class="meals-actions">
+          <div class="meals-sync-info">
+            <span class="recipe-count-badge">
+              <ha-icon icon="mdi:book-open-page-variant-outline" style="--mdc-icon-size: 16px;"></ha-icon>
+              ${recipes.length} Recipes
+            </span>
+            ${this._directRecipesLoading ? html`<span class="syncing-indicator"><ha-icon icon="mdi:loading" class="spin-icon"></ha-icon> Syncing...</span>` : ''}
+          </div>
           <button class="btn-meals-action" @click="${() => this._syncRecipesFromWebsite()}" title="Trigger Home Assistant to refresh the recipe sensor and catalog">
             <ha-icon icon="mdi:cloud-sync-outline" style="--mdc-icon-size: 18px;"></ha-icon>
-            <span>Refresh Catalog</span>
+            <span>Refresh</span>
           </button>
           ${websiteUrl ? html`
             <a href="${websiteUrl}" target="_blank" rel="noopener noreferrer" class="btn-meals-action link" title="Open Recipe Website">
               <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size: 18px;"></ha-icon>
-              <span>Open Website</span>
+              <span>Website</span>
             </a>
           ` : ''}
         </div>
@@ -910,7 +1018,7 @@ class NightlightDashboard extends LitElement {
         ${weekDays.map(d => {
           const dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
           const dayName = d.toLocaleDateString('default', { weekday: 'long' });
-          const isToday = d.toDateString() === today.toDateString();
+          const isToday = d.toDateString() === now.toDateString();
           const meal = mealsByDate[dateStr];
           
           let recipeTitle = meal?.recipeTitle || "";
@@ -934,6 +1042,15 @@ class NightlightDashboard extends LitElement {
               fat: selectedRecipe.macros.fat || 0
             };
           }
+
+          // Cooking time extraction
+          let totalMinutes = 0;
+          if (selectedRecipe && (selectedRecipe.cookTime || selectedRecipe.prepTime)) {
+            totalMinutes = (selectedRecipe.cookTime || 0) + (selectedRecipe.prepTime || 0);
+          } else if (meal && (meal.cookTime || meal.prepTime)) {
+            totalMinutes = (meal.cookTime || 0) + (meal.prepTime || 0);
+          }
+          const cookTimeDisplay = totalMinutes > 0 ? `${totalMinutes} min` : '';
 
           return html`
             <div class="meal-card ${isToday ? 'today' : ''}">
@@ -972,12 +1089,20 @@ class NightlightDashboard extends LitElement {
                   </div>
                 </div>
                 
-                ${macros ? html`
+                ${(cookTimeDisplay || macros) ? html`
                   <div class="meal-macros">
-                    <span class="macro cal">${macros.cal} kcal</span>
-                    <span class="macro pro">${macros.pro}g P</span>
-                    <span class="macro carbs">${macros.carbs}g C</span>
-                    <span class="macro fat">${macros.fat}g F</span>
+                    ${cookTimeDisplay ? html`
+                      <span class="macro time" title="Prep & Cook Time">
+                        <ha-icon icon="mdi:clock-outline" style="--mdc-icon-size: 13px;"></ha-icon>
+                        ${cookTimeDisplay}
+                      </span>
+                    ` : ''}
+                    ${macros ? html`
+                      <span class="macro cal">${macros.cal} kcal</span>
+                      <span class="macro pro">${macros.pro}g P</span>
+                      <span class="macro carbs">${macros.carbs}g C</span>
+                      <span class="macro fat">${macros.fat}g F</span>
+                    ` : ''}
                   </div>
                 ` : ''}
               </div>
@@ -1039,32 +1164,133 @@ class NightlightDashboard extends LitElement {
     }, 600);
   }
 
-  async _scheduleMeal(dateStr, recipeId) {
+  _openCustomMealModal(dateStr, defaultTitle = '') {
+    this._customMealModalDate = dateStr;
+    this._customMealInput = defaultTitle || '';
+    this._customMealCalories = '';
+    this._customMealCookTime = '';
+    this.requestUpdate();
+  }
+
+  _closeCustomMealModal() {
+    this._customMealModalDate = null;
+    this._customMealInput = '';
+    this._customMealCalories = '';
+    this._customMealCookTime = '';
+    this.requestUpdate();
+  }
+
+  async _submitCustomMeal() {
+    if (!this._customMealModalDate) return;
+    const title = (this._customMealInput || '').trim();
+    if (!title) return;
+
+    const dateStr = this._customMealModalDate;
+    const calories = parseInt(this._customMealCalories, 10) || 0;
+    const cookTime = parseInt(this._customMealCookTime, 10) || 0;
+    this._closeCustomMealModal();
+
+    await this._scheduleMeal(dateStr, 'custom', { title, calories, cookTime });
+  }
+
+  async _scheduleMeal(dateStr, recipeId, customData = null) {
     const mealSensorId = this.config.meals_sensor || 'sensor.meal_planner_weekly_meals';
     const recipeSensorId = this.config.recipes_sensor || 'sensor.meal_planner_recipes';
 
-    if (recipeId === 'custom') {
-      const customName = prompt("Enter custom meal name:");
-      if (!customName || !customName.trim()) {
-        this.requestUpdate();
-        return;
+    // Determine Day Name for meal_entities
+    const parts = dateStr.split('-');
+    const targetDate = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const dayName = dayNames[targetDate.getDay()];
+
+    const updateMealEntity = async (val) => {
+      if (this.config.meal_entities && typeof this.config.meal_entities === 'object') {
+        const entityKey = Object.keys(this.config.meal_entities).find(k => k.toLowerCase() === dayName.toLowerCase());
+        if (entityKey) {
+          const entId = this.config.meal_entities[entityKey];
+          const domain = entId.split('.')[0] || 'input_text';
+          try {
+            await this.hass.callService(domain, 'set_value', { entity_id: entId, value: val });
+          } catch (e) {
+            console.warn(`Failed to update ${entId}:`, e);
+          }
+        }
       }
+    };
+
+    if (recipeId === 'custom') {
+      const customTitle = customData?.title || 'Custom Meal';
+      const customCalories = customData?.calories || 0;
+      const customCookTime = customData?.cookTime || 0;
       const customId = 'custom_' + Date.now();
-      await this.hass.callService('rest_command', 'meal_planner_upsert_weekly_meal', {
-        id: dateStr,
-        date: dateStr,
-        recipe_id: customId,
-        recipe_title: customName.trim(),
-        prep_time: 0,
-        cook_time: 0,
-        servings: 1,
-        calories: 0,
-        protein: 0,
-        carbs: 0,
-        fat: 0
-      });
+
+      // 1. Optimistic Local Update
+      this._localMealOverrides = {
+        ...this._localMealOverrides,
+        [dateStr]: {
+          id: dateStr,
+          date: dateStr,
+          recipeId: customId,
+          recipeTitle: customTitle,
+          macros: customCalories > 0 ? { cal: customCalories, pro: 0, carbs: 0, fat: 0 } : null,
+          url: '',
+          prepTime: 0,
+          cookTime: customCookTime
+        }
+      };
+      this.requestUpdate();
+
+      // 2. Update Home Assistant input_text entity if configured
+      await updateMealEntity(customTitle);
+
+      // 3. Send to Home Assistant rest_command
+      try {
+        await this.hass.callService('rest_command', 'meal_planner_upsert_weekly_meal', {
+          id: dateStr,
+          date: dateStr,
+          recipe_id: customId,
+          recipe_title: customTitle,
+          prep_time: 0,
+          cook_time: customCookTime,
+          servings: 1,
+          calories: customCalories,
+          protein: 0,
+          carbs: 0,
+          fat: 0
+        });
+      } catch (err) {
+        console.warn("HA rest_command meal upsert:", err);
+      }
+
+      // 4. Secondary: Try Home Assistant todo list / calendar service if configured
+      if (this.config.meal_todo_list) {
+        try {
+          await this.hass.callService('todo', 'add_item', {
+            entity_id: this.config.meal_todo_list,
+            item: `[Meal ${dateStr}] ${customTitle}`,
+            due_date: dateStr
+          });
+        } catch (e) {
+          console.warn("HA todo meal service:", e);
+        }
+      }
     } else if (!recipeId) {
-      await this.hass.callService('rest_command', 'meal_planner_delete_weekly_meal', { id: dateStr, date: dateStr });
+      // 1. Optimistic Local Update
+      this._localMealOverrides = {
+        ...this._localMealOverrides,
+        [dateStr]: null
+      };
+      this.requestUpdate();
+
+      // 2. Clear Home Assistant input_text entity if configured
+      await updateMealEntity('');
+
+      // 3. Call REST delete
+      try {
+        await this.hass.callService('rest_command', 'meal_planner_delete_weekly_meal', { id: dateStr, date: dateStr });
+      } catch (err) {
+        console.warn("HA rest_command meal delete:", err);
+      }
     } else {
       const recipesSensor = this.hass.states[recipeSensorId];
       const rawRecipes = this._extractRawList(recipesSensor);
@@ -1075,25 +1301,57 @@ class NightlightDashboard extends LitElement {
       const recipe = combinedMap.get(recipeId);
       
       if (recipe) {
-        await this.hass.callService('rest_command', 'meal_planner_upsert_weekly_meal', {
-          id: dateStr,
-          date: dateStr,
-          recipe_id: recipeId,
-          recipe_title: recipe.title || "",
-          prep_time: recipe.prepTime || 0,
-          cook_time: recipe.cookTime || 0,
-          servings: recipe.servings || 2,
-          calories: recipe.macros?.calories || 0,
-          protein: recipe.macros?.protein || 0,
-          carbs: recipe.macros?.carbs || 0,
-          fat: recipe.macros?.fat || 0
-        });
+        // 1. Optimistic Local Update
+        this._localMealOverrides = {
+          ...this._localMealOverrides,
+          [dateStr]: {
+            id: dateStr,
+            date: dateStr,
+            recipeId: recipe.id,
+            recipeTitle: recipe.title || "",
+            macros: recipe.macros ? {
+              cal: recipe.macros.calories || 0,
+              pro: recipe.macros.protein || 0,
+              carbs: recipe.macros.carbs || 0,
+              fat: recipe.macros.fat || 0
+            } : null,
+            url: recipe.url || "",
+            prepTime: recipe.prepTime || 0,
+            cookTime: recipe.cookTime || 0
+          }
+        };
+        this.requestUpdate();
+
+        // 2. Update Home Assistant input_text entity if configured
+        await updateMealEntity(recipe.title || "");
+
+        // 3. Send to Home Assistant rest_command
+        try {
+          await this.hass.callService('rest_command', 'meal_planner_upsert_weekly_meal', {
+            id: dateStr,
+            date: dateStr,
+            recipe_id: recipeId,
+            recipe_title: recipe.title || "",
+            prep_time: recipe.prepTime || 0,
+            cook_time: recipe.cookTime || 0,
+            servings: recipe.servings || 2,
+            calories: recipe.macros?.calories || 0,
+            protein: recipe.macros?.protein || 0,
+            carbs: recipe.macros?.carbs || 0,
+            fat: recipe.macros?.fat || 0
+          });
+        } catch (err) {
+          console.warn("HA rest_command recipe meal upsert:", err);
+        }
       }
     }
     
+    // Refresh the meal sensor to update UI from Home Assistant
     setTimeout(() => {
-      this.hass.callService('homeassistant', 'update_entity', { entity_id: mealSensorId });
-    }, 800);
+      if (this.hass) {
+        this.hass.callService('homeassistant', 'update_entity', { entity_id: mealSensorId });
+      }
+    }, 600);
   }
 
   _renderRecipePickerModal() {
@@ -1187,11 +1445,11 @@ class NightlightDashboard extends LitElement {
             ` : ''}
 
             <!-- Quick Add Custom Option -->
-            <div class="recipe-custom-prompt" @click="${() => { const date = this._recipePickerDate; this._closeRecipePicker(); this._scheduleMeal(date, 'custom'); }}">
+            <div class="recipe-custom-prompt" @click="${() => { const date = this._recipePickerDate; const q = this._recipeSearchQuery; this._closeRecipePicker(); this._openCustomMealModal(date, q); }}">
               <div class="custom-icon">✏️</div>
               <div class="custom-text">
                 <strong>Add a Custom / One-off Meal...</strong>
-                <span>Type in a custom title not currently in your recipe catalog</span>
+                <span>Add any custom meal title directly to Home Assistant</span>
               </div>
             </div>
 
@@ -1201,7 +1459,7 @@ class NightlightDashboard extends LitElement {
                 <div class="no-recipes-found">
                   <ha-icon icon="mdi:food-off-outline" style="--mdc-icon-size: 40px; color: var(--nl-fg-sec);"></ha-icon>
                   <p>No recipes found matching "<strong>${this._recipeSearchQuery}</strong>"</p>
-                  <button class="btn-primary" style="margin-top: 8px;" @click="${() => { const date = this._recipePickerDate; this._closeRecipePicker(); this._scheduleMeal(date, 'custom'); }}">
+                  <button class="btn-primary" style="margin-top: 8px;" @click="${() => { const date = this._recipePickerDate; const q = this._recipeSearchQuery; this._closeRecipePicker(); this._openCustomMealModal(date, q); }}">
                     ✏️ Enter "${this._recipeSearchQuery}" as Custom Meal
                   </button>
                 </div>
@@ -1248,6 +1506,78 @@ class NightlightDashboard extends LitElement {
                   </div>
                 `;
               })}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderCustomMealModal() {
+    if (!this._customMealModalDate) return '';
+
+    const targetDate = new Date(this._customMealModalDate + 'T00:00:00');
+    const formattedDate = targetDate.toLocaleDateString('default', { weekday: 'long', month: 'short', day: 'numeric' });
+
+    return html`
+      <div class="modal-overlay" @click="${() => this._closeCustomMealModal()}">
+        <div class="modal-card custom-meal-modal" @click="${e => e.stopPropagation()}">
+          <div class="modal-header" style="background: var(--nl-accent);">
+            <div>
+              <h2>Add Custom Meal</h2>
+              <p style="margin: 4px 0 0 0; font-size: 0.85rem; opacity: 0.9;">Schedule for ${formattedDate}</p>
+            </div>
+            <button @click="${() => this._closeCustomMealModal()}">✕</button>
+          </div>
+
+          <div class="modal-content custom-meal-modal-body">
+            <div class="form-group">
+              <label>Meal / Dish Name *</label>
+              <input 
+                type="text" 
+                class="form-input" 
+                placeholder="e.g. Leftover Lasagna, Takeout Pizza, Grandma's Stew..." 
+                .value="${this._customMealInput}"
+                @input="${(e) => { this._customMealInput = e.target.value; }}"
+                @keydown="${(e) => { if (e.key === 'Enter') this._submitCustomMeal(); }}"
+                autofocus
+              />
+            </div>
+
+            <div class="form-row-2">
+              <div class="form-group">
+                <label>Estimated Calories (kcal)</label>
+                <input 
+                  type="number" 
+                  class="form-input" 
+                  placeholder="e.g. 650 (optional)" 
+                  .value="${this._customMealCalories}"
+                  @input="${(e) => { this._customMealCalories = e.target.value; }}"
+                />
+              </div>
+
+              <div class="form-group">
+                <label>Cooking Time (minutes)</label>
+                <input 
+                  type="number" 
+                  class="form-input" 
+                  placeholder="e.g. 20 (optional)" 
+                  .value="${this._customMealCookTime}"
+                  @input="${(e) => { this._customMealCookTime = e.target.value; }}"
+                />
+              </div>
+            </div>
+
+            <p class="custom-meal-hint">
+              <ha-icon icon="mdi:home-assistant" style="--mdc-icon-size: 16px;"></ha-icon>
+              This custom meal entry will be sent directly to your Home Assistant meal sensors and todo lists.
+            </p>
+
+            <div class="modal-actions" style="margin-top: 12px; display: flex; justify-content: flex-end; gap: 10px;">
+              <button class="btn-secondary" @click="${() => this._closeCustomMealModal()}">Cancel</button>
+              <button class="btn-primary" @click="${() => this._submitCustomMeal()}" ?disabled="${!this._customMealInput || !this._customMealInput.trim()}">
+                Add Meal
+              </button>
             </div>
           </div>
         </div>
@@ -2190,12 +2520,21 @@ class NightlightDashboard extends LitElement {
       .task-row.completed ha-icon { color: #10B981; }
       
       .meals-header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
+      .meals-week-nav { display: inline-flex; align-items: center; gap: 6px; background: var(--nl-surface); border: 1px solid var(--nl-border); padding: 4px 6px; border-radius: 12px; box-shadow: var(--nl-shadow); }
+      .btn-week-arrow { background: transparent; border: none; color: var(--nl-fg); width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s; }
+      .btn-week-arrow:hover { background: var(--nl-bg); color: var(--nl-accent); }
+      .meals-week-title { display: flex; align-items: center; gap: 8px; padding: 0 6px; }
+      .week-range-text { font-size: 0.95rem; font-weight: 700; color: var(--nl-fg); white-space: nowrap; }
+      .badge-this-week { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; background: rgba(59, 130, 246, 0.12); color: var(--nl-accent); padding: 3px 8px; border-radius: 6px; white-space: nowrap; }
+      .btn-jump-this-week { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; background: var(--nl-accent); color: #fff; padding: 3px 8px; border-radius: 6px; border: none; cursor: pointer; transition: opacity 0.2s; white-space: nowrap; }
+      .btn-jump-this-week:hover { opacity: 0.9; }
+
       .meals-sync-info { display: flex; align-items: center; gap: 12px; }
       .recipe-count-badge { display: inline-flex; align-items: center; gap: 6px; background: var(--nl-surface); border: 1px solid var(--nl-border); padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 600; color: var(--nl-fg); }
       .syncing-indicator { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--nl-accent); font-weight: 500; }
       .spin-icon { animation: spin 1.2s linear infinite; }
       @keyframes spin { 100% { transform: rotate(360deg); } }
-      .meals-actions { display: flex; gap: 10px; align-items: center; }
+      .meals-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
       .btn-meals-action { display: inline-flex; align-items: center; gap: 6px; background: var(--nl-surface); border: 1px solid var(--nl-border); padding: 8px 14px; border-radius: 10px; color: var(--nl-fg); font-size: 0.85rem; font-weight: 600; cursor: pointer; text-decoration: none; transition: all 0.2s; }
       .btn-meals-action:hover { background: var(--nl-bg); border-color: var(--nl-accent); color: var(--nl-accent); }
 
@@ -2221,8 +2560,9 @@ class NightlightDashboard extends LitElement {
       .btn-meal-clear { background: var(--nl-surface); border: 1px solid var(--nl-border); color: #EF4444; border-radius: 8px; padding: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
       .btn-meal-clear:hover { background: rgba(239, 68, 68, 0.1); border-color: #EF4444; }
 
-      .meal-macros { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; }
+      .meal-macros { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; align-items: center; }
       .macro { font-size: 0.75rem; padding: 4px 8px; border-radius: 12px; font-weight: 600; }
+      .macro.time { background: rgba(100, 116, 139, 0.12); color: var(--nl-fg); display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--nl-border); }
       .macro.cal { background: rgba(239, 68, 68, 0.1); color: #EF4444; }
       .macro.pro { background: rgba(59, 130, 246, 0.1); color: #3B82F6; }
       .macro.carbs { background: rgba(16, 185, 129, 0.1); color: #10B981; }
@@ -2266,6 +2606,12 @@ class NightlightDashboard extends LitElement {
       .recipe-pick-btn:hover { opacity: 0.9; }
 
       .no-recipes-found { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 16px; text-align: center; color: var(--nl-fg-sec); }
+
+      /* Custom Meal Modal */
+      .custom-meal-modal { max-width: 480px; }
+      .custom-meal-modal-body { padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+      .form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .custom-meal-hint { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: var(--nl-fg-sec); background: var(--nl-bg); padding: 10px 12px; border-radius: 8px; border: 1px solid var(--nl-border); margin: 0; line-height: 1.4; }
 
       /* Shopping List */
       .shopping-container { display: flex; flex-direction: column; gap: 24px; max-width: 600px; margin: 0 auto; width: 100%; }
